@@ -712,7 +712,7 @@ body {
 
 <script>
 // ─── Version ─────────────────────────────────────────────────────────────────
-const TOOL_VERSION = '1.9.1';
+const TOOL_VERSION = '1.9.2';
 
 // ─── State ────────────────────────────────────────────────────────────────────
 const state = {
@@ -3139,10 +3139,22 @@ function buildTimelineData() {
     validCount++;
   }
   if (validCount < 2) return null;
+
+  // When zoomed, clamp the time range and filter rows
+  const zoom = tlState.zoom;
+  if (zoom) {
+    minMs = zoom.startMs;
+    maxMs = zoom.endMs;
+  }
+  const rowsInRange = zoom
+    ? allRows.filter(r => { const t = toMs(r.ts); return t && t >= minMs && t <= maxMs; })
+    : allRows;
+
   const spanMin = (maxMs - minMs) / 60000;
 
   let bucketMin;
-  if      (spanMin <= 30)   bucketMin = 1;
+  if      (spanMin <= 10)   bucketMin = 0.25;   // 15-second buckets
+  else if (spanMin <= 30)   bucketMin = 1;
   else if (spanMin <= 120)  bucketMin = 5;
   else if (spanMin <= 480)  bucketMin = 15;
   else if (spanMin <= 1440) bucketMin = 60;
@@ -3150,14 +3162,16 @@ function buildTimelineData() {
 
   const bucketMs   = bucketMin * 60000;
   const startMs    = Math.floor(minMs / bucketMs) * bucketMs;
-  const numBuckets = Math.ceil((maxMs - startMs) / bucketMs) + 1;
+  const numBuckets = Math.max(2, Math.ceil((maxMs - startMs) / bucketMs) + 1);
 
   const fmtLabel = ms => {
     const d = new Date(ms);
     const h = d.getHours().toString().padStart(2,'0');
     const m = d.getMinutes().toString().padStart(2,'0');
+    const s = d.getSeconds().toString().padStart(2,'0');
     if (bucketMin >= 1440) return `${d.getMonth()+1}/${d.getDate()}`;
     if (bucketMin >= 60)   return h === '00' ? `${d.getMonth()+1}/${d.getDate()}` : `${h}:00`;
+    if (bucketMin < 1)     return `${h}:${m}:${s}`;
     return `${h}:${m}`;
   };
 
@@ -3166,7 +3180,7 @@ function buildTimelineData() {
     error:0, warning:0, info:0, debug:0
   }));
 
-  for (const r of allRows) {
+  for (const r of rowsInRange) {
     const ms = toMs(r.ts);
     if (!ms) continue;
     const idx = Math.min(numBuckets-1, Math.floor((ms - startMs) / bucketMs));
@@ -3177,14 +3191,16 @@ function buildTimelineData() {
     else if (lvl === 'debug' || lvl === 'trace')  b.debug++;
     else                                           b.info++;
   }
-  return { buckets, bucketMin };
+  return { buckets, bucketMin, bucketMs };
 }
 
 // Toggle state for timeline series — persists across re-renders
-const tlState = { error:true, warning:true, info:true, debug:false, normalize:false };
+const tlState = { error:true, warning:true, info:true, debug:false, normalize:false, zoom:null, _brushData:null };
+let _tlBrush = { down:false, startSvgX:0, dragging:false, justZoomed:false };
 
 function tlToggle(key)      { tlState[key] = !tlState[key]; renderTimeline(); }
 function tlSetNormalize(v)  { tlState.normalize = v;        renderTimeline(); }
+function tlResetZoom()      { tlState.zoom = null;          renderTimeline(); }
 
 function renderTimeline() {
   const el = document.getElementById('timeline-content');
@@ -3198,7 +3214,7 @@ function renderTimeline() {
     el.innerHTML = '<div style="text-align:center;padding:60px;color:var(--muted);font-size:13px">Not enough timestamped log data to build a timeline.</div>';
     return;
   }
-  const { buckets, bucketMin } = data;
+  const { buckets, bucketMin, bucketMs } = data;
   const totals = buckets.reduce((a,b) => ({
     error: a.error+b.error, warning: a.warning+b.warning,
     info:  a.info +b.info,  debug:   a.debug  +b.debug
@@ -3284,9 +3300,17 @@ function renderTimeline() {
   const titleSvg = `<text x="${ML}" y="${MT-3}" font-size="10" font-weight="600" fill="var(--text)">Log Activity</text>
     ${legendSvg}`;
 
-  const svg = `<svg viewBox="0 0 ${W} ${TOTAL_H}" xmlns="http://www.w3.org/2000/svg"
-    style="width:100%;height:auto;display:block;font-family:var(--font-mono,monospace)">
+  // Store brush mapping data for mouse handlers
+  tlState._brushData = { buckets, bucketMs, w:W, ml:ML, mr:MR, mt:MT, hChart:H_CHART };
+
+  const svg = `<svg id="tl-svg" viewBox="0 0 ${W} ${TOTAL_H}" xmlns="http://www.w3.org/2000/svg"
+    style="width:100%;height:auto;display:block;font-family:var(--font-mono,monospace);user-select:none;cursor:crosshair"
+    onmousedown="tlBrushDown(event)" onmousemove="tlBrushMove(event)"
+    onmouseup="tlBrushUp(event)" onmouseleave="tlBrushCancel()">
     ${yGrid()}${bars}${axes}${xLabels}${titleSvg}
+    <rect id="tl-bsel" x="${ML}" y="${MT}" width="0" height="${H_CHART}"
+      fill="rgba(88,166,255,0.10)" stroke="#58a6ff" stroke-width="1"
+      pointer-events="none" display="none"/>
   </svg>`;
 
   // Filter + mode buttons
@@ -3317,7 +3341,9 @@ function renderTimeline() {
       <button type="button" class="filter-btn" onclick="tlSetNormalize(true)"
         style="font-size:11px;${tlState.normalize?'background:var(--bg3);color:var(--text);border-color:var(--primary)':''}">% Normalize</button>
       <span style="flex:1"></span>
-      <span style="font-size:10px;color:var(--muted)">${bucketMin}-min buckets · ${buckets.length} intervals · hover for details · click jumps to Log Viewer</span>
+      ${tlState.zoom ? `<button type="button" class="filter-btn" onclick="tlResetZoom()"
+        style="font-size:11px;background:rgba(88,166,255,0.12);color:#58a6ff;border-color:#58a6ff">↩ Reset Zoom</button>` : ''}
+      <span style="font-size:10px;color:var(--muted)">${bucketMin < 1 ? `${bucketMin*60}-sec` : `${bucketMin}-min`} buckets · ${buckets.length} intervals${tlState.zoom ? ' · <strong style="color:#58a6ff">zoomed</strong>' : ''} · drag to zoom · click jumps to Log Viewer</span>
     </div>
     <div style="background:var(--bg1);border:1px solid var(--border);border-radius:8px;padding:12px;overflow-x:auto">${svg}</div>
     <div id="tl-tooltip" style="display:none;position:fixed;background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-size:11px;color:var(--text);pointer-events:none;z-index:9999;min-width:150px"></div>`;
@@ -3349,7 +3375,76 @@ function tlHide() {
   if (tip) tip.style.display = 'none';
 }
 
+function tlSvgX(event) {
+  const svg = document.getElementById('tl-svg');
+  if (!svg) return 0;
+  const rect = svg.getBoundingClientRect();
+  const w = (tlState._brushData && tlState._brushData.w) || 900;
+  return (event.clientX - rect.left) * (w / rect.width);
+}
+
+function tlBrushDown(event) {
+  const svgX = tlSvgX(event);
+  const bd = tlState._brushData;
+  if (!bd || svgX < bd.ml || svgX > bd.w - bd.mr) return;
+  _tlBrush = { down:true, startSvgX:svgX, dragging:false, justZoomed:false };
+}
+
+function tlBrushMove(event) {
+  if (!_tlBrush.down) return;
+  const bd = tlState._brushData;
+  if (!bd) return;
+  const svgX = Math.max(bd.ml, Math.min(bd.w - bd.mr, tlSvgX(event)));
+  const dx = Math.abs(svgX - _tlBrush.startSvgX);
+  if (dx > 6) {
+    _tlBrush.dragging = true;
+    tlHide();
+    const bsel = document.getElementById('tl-bsel');
+    if (bsel) {
+      const x1 = Math.min(_tlBrush.startSvgX, svgX);
+      const x2 = Math.max(_tlBrush.startSvgX, svgX);
+      bsel.setAttribute('x', x1.toFixed(1));
+      bsel.setAttribute('width', (x2 - x1).toFixed(1));
+      bsel.removeAttribute('display');
+    }
+  }
+}
+
+function tlBrushUp(event) {
+  if (!_tlBrush.down) return;
+  const endSvgX = tlSvgX(event);
+  const startSvgX = _tlBrush.startSvgX;
+  const wasDragging = _tlBrush.dragging;
+  _tlBrush = { down:false, startSvgX:0, dragging:false, justZoomed:false };
+  const bsel = document.getElementById('tl-bsel');
+  if (bsel) bsel.setAttribute('display', 'none');
+  if (!wasDragging) return;
+
+  const bd = tlState._brushData;
+  if (!bd) return;
+  const { buckets, bucketMs, w, ml, mr } = bd;
+  const chartW = w - ml - mr;
+  const svgMin = Math.max(ml, Math.min(startSvgX, endSvgX));
+  const svgMax = Math.min(w - mr, Math.max(startSvgX, endSvgX));
+
+  const startIdx = Math.max(0, Math.floor((svgMin - ml) / chartW * buckets.length));
+  const endIdx   = Math.min(buckets.length - 1, Math.floor((svgMax - ml) / chartW * buckets.length));
+  if (endIdx <= startIdx) return;
+
+  tlState.zoom = { startMs: buckets[startIdx].ms, endMs: buckets[endIdx].ms + bucketMs };
+  _tlBrush.justZoomed = true;
+  renderTimeline();
+}
+
+function tlBrushCancel() {
+  if (!_tlBrush.down) return;
+  _tlBrush = { down:false, startSvgX:0, dragging:false, justZoomed:false };
+  const bsel = document.getElementById('tl-bsel');
+  if (bsel) bsel.setAttribute('display', 'none');
+}
+
 function tlJump(g) {
+  if (_tlBrush.justZoomed) { _tlBrush.justZoomed = false; return; }
   tlHide();
   const ms = +g.dataset.ms, bmin = +g.dataset.bmin;
   const d   = new Date(ms);
