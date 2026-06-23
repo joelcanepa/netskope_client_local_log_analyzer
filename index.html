@@ -643,6 +643,12 @@ body {
       <input class="search-box" id="log-search" placeholder="🔍  Search logs…" oninput="onSearch()" onkeydown="if(event.key==='Enter'){event.preventDefault();onSearch();}">
       <button type="button" id="log-regex-btn" class="filter-btn" onclick="toggleLogRegex(this)" title="Toggle regular expression search" style="font-size:12px;padding:3px 8px;font-family:monospace">.*</button>
       <button type="button" id="log-invert-btn" class="filter-btn" onclick="toggleLogInvert(this)" title="Invert: show lines NOT matching the search" style="font-size:13px;padding:3px 8px">⊘</button>
+      <div id="log-flow-filters" style="display:none;align-items:center;gap:2px">
+        <span style="display:inline-block;width:1px;height:16px;background:var(--border);margin:0 4px;flex-shrink:0"></span>
+        <button type="button" id="flow-all-btn"    class="filter-btn" onclick="logFlowFilter('')"              style="font-size:10px;padding:2px 6px">All</button>
+        <button type="button" id="flow-steer-btn"  class="filter-btn" onclick="logFlowFilter('Tunneling flow')" style="font-size:10px;padding:2px 6px;color:var(--primary)">▲ Steer</button>
+        <button type="button" id="flow-bypass-btn" class="filter-btn" onclick="logFlowFilter('Bypassing')"     style="font-size:10px;padding:2px 6px;color:var(--warning)">▼ Bypass</button>
+      </div>
       <div class="filter-group" id="level-filters">
         <button class="filter-btn active-error"   data-level="error"   onclick="toggleLevel(this)">ERROR</button>
         <button class="filter-btn active-warning" data-level="warning" onclick="toggleLevel(this)">WARN</button>
@@ -712,7 +718,7 @@ body {
 
 <script>
 // ─── Version ─────────────────────────────────────────────────────────────────
-const TOOL_VERSION = '1.9.2';
+const TOOL_VERSION = '1.9.3';
 
 // ─── State ────────────────────────────────────────────────────────────────────
 const state = {
@@ -2702,13 +2708,14 @@ function populateFileSelect() {
     opt.textContent = `${f} (${state.parsedLogs[f].length.toLocaleString()} lines)`;
     sel.appendChild(opt);
   });
-  sel.onchange = () => { state.currentFile = sel.value; applyFilters(); };
+  sel.onchange = () => { state.currentFile = sel.value; applyFilters(); updateFlowFilters(); };
   if (files.length > 0) {
     // Default to nsdebuglog.log if present, else first
     const pref = files.find(f => f === 'nsdebuglog.log') || files[0];
     sel.value = pref;
     state.currentFile = pref;
     applyFilters();
+    updateFlowFilters();
   }
   // Update total badge
   const total = Object.values(state.parsedLogs).reduce((s,r)=>s+r.length,0);
@@ -2757,6 +2764,30 @@ function toggleLogInvert(btn) {
   state.logInvertMode = !state.logInvertMode;
   btn.classList.toggle('invert-active', state.logInvertMode);
   onSearch();
+}
+
+function logFlowFilter(term) {
+  const inp = document.getElementById('log-search');
+  if (inp) inp.value = term;
+  state.logRegexMode = false;
+  state.logCompiledRe = null;
+  document.getElementById('log-regex-btn')?.classList.remove('regex-active');
+  const ids = ['flow-all-btn', 'flow-steer-btn', 'flow-bypass-btn'];
+  const terms = ['', 'Tunneling flow', 'Bypassing'];
+  ids.forEach((id, i) => {
+    const b = document.getElementById(id);
+    if (b) b.style.fontWeight = terms[i] === term ? '700' : '';
+  });
+  onSearch();
+}
+
+function updateFlowFilters() {
+  const wrap = document.getElementById('log-flow-filters');
+  if (!wrap) return;
+  const hasNsDebug = state.globalSearchMode
+    ? Object.keys(state.parsedLogs).some(f => /nsdebuglog/i.test(f))
+    : /nsdebuglog/i.test(state.currentFile || '');
+  wrap.style.display = hasNsDebug ? 'inline-flex' : 'none';
 }
 
 function onSearch() {
@@ -2867,6 +2898,7 @@ function toggleGlobalSearch(btn) {
     if (srt) { srt.style.opacity = ''; srt.style.pointerEvents = ''; }
     applyFilters();
   }
+  updateFlowFilters();
 }
 
 function runGlobalSearch() {
