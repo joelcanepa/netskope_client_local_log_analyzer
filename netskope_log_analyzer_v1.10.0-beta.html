@@ -905,6 +905,8 @@ const state = {
   appInfo:       null,  // { apps: [], vpnClients: [] } from appInfo.log
   networkState:  null,  // { nics: [], routes: [], isWin } from network-state.log
   devState:      null,  // device state fields from nsuser.conf cache
+  nsdeviceid:    null,  // parsed nsdeviceid.json (device classification rules)
+  nsdeviceidstatus: null, // parsed nsdeviceidstatus.json (rule version)
   bwanFlows:     null,  // { tunnelFlows[], directFlows[] } from nsbwandebuglog
   bwanTunnel:    null,  // { hubIp, vip, routes[], pathCount, connected } from nsbwanclient
   identity: null,     // { username, email, domain, upn, source }
@@ -1176,6 +1178,7 @@ async function loadZip(file) {
       'appInfo.log','network-state.log','nsexception.json','npaexceptions.json',
       'nsuser.conf','nsuserconfig.json','nsinternal.json',
       'nssteering.json','nsbwanconfig.json','eventcache.json',
+      'nsdeviceid.json','nsdeviceidstatus.json',
       'nsbwandebuglog.log','nsbwandebuglog_old.log','nsbwanclient.log'];
 
     // Include the primary log + most recent rotated copy (.1.log only).
@@ -1325,6 +1328,12 @@ function processFiles() {
     }
     if (state.files['npaexceptions.json']) {
       try { state.npaExceptions = JSON.parse(state.files['npaexceptions.json']); } catch {}
+    }
+    if (state.files['nsdeviceid.json']) {
+      try { state.nsdeviceid = JSON.parse(state.files['nsdeviceid.json']); } catch {}
+    }
+    if (state.files['nsdeviceidstatus.json']) {
+      try { state.nsdeviceidstatus = JSON.parse(state.files['nsdeviceidstatus.json']); } catch {}
     }
 
     if (state.files['appInfo.log']) {
@@ -2872,6 +2881,10 @@ function renderSysInfo() {
   if (envRows.length) sysHtml += diSection('Environment', '', diKvGrid(envRows), false);
   if (sysHtml) panels.system = { icon: '🖥️', label: 'System', html: sysHtml };
 
+  // Summary panel
+  const summaryHtml = buildSummaryPanel();
+  if (summaryHtml) panels.summary = { icon: '📊', label: 'Summary', html: summaryHtml };
+
   // Client panel
   const nsClientFields = [
     'NS Client Version','Tenant ID','Tenant Host','Org Key',
@@ -2885,6 +2898,14 @@ function renderSysInfo() {
   if (nsRows.length) clientHtml += diSection('Netskope Client', s['NS Client Version'] || '', diKvGrid(nsRows), true);
   if (ds && Object.keys(ds).length) clientHtml += diSection('Device State', ds['Classification'] || '', diKvGrid(Object.entries(ds)), true);
   if (clientHtml) panels.client = { icon: '🛡️', label: 'Netskope Client', html: clientHtml };
+
+  // Steering config panel
+  const steeringHtml = buildSteeringPanel();
+  if (steeringHtml) panels.steering = { icon: '🔀', label: 'Steering', html: steeringHtml };
+
+  // Device classification panel
+  const devClassHtml = buildDevClassPanel();
+  if (devClassHtml) panels.devclass = { icon: '🔐', label: 'Device Classification', html: devClassHtml };
 
   // Network panel
   let netHtml = '';
@@ -2952,7 +2973,8 @@ function renderSysInfo() {
   // ── Build sidebar nav ────────────────────────────────────────────
   const panelKeys = Object.keys(panels);
   if (!panelKeys.length) return;
-  const activePanel = state._siActivePanel && panels[state._siActivePanel] ? state._siActivePanel : panelKeys[0];
+  const defaultPanel = panels.summary ? 'summary' : panelKeys[0];
+  const activePanel = state._siActivePanel && panels[state._siActivePanel] ? state._siActivePanel : defaultPanel;
   state._siActivePanel = activePanel;
 
   const sidebar = document.getElementById('si-sidebar');
@@ -3102,6 +3124,216 @@ function parseAppInfoLog(text) {
   }
 
   return { apps, vpnClients };
+}
+
+// ── Summary panel ─────────────────────────────────────────────────────────────
+function buildSummaryPanel() {
+  const s = state.sysinfo;
+  const ns = state.steering || {};
+  const cfg = state.config;
+  const cc = cfg?.clientConfig || cfg?.cache?.config || {};
+  const uc = state.nsuser?.userConfig || {};
+  const fc = cfg?.failClose || {};
+  const id = state.identity || {};
+
+  const TUNNEL_STATUS = { '0': 'Disabled', '8': 'Disconnected', '21': 'Disabled', '22': 'Connected', '1': 'Connected' };
+  const NPA_STATUS    = { '0': 'Active', '1': 'Connecting', '2': 'Connected (GW)', '3': 'Auth Failed', '4': 'Connected', '5': 'Connected', '6': 'Not enrolled' };
+
+  const tunnelCode  = uc.tunnelStatus != null ? String(uc.tunnelStatus) : null;
+  const npaCode     = uc.npaStatus    != null ? String(uc.npaStatus)    : null;
+  const tunnelLabel = tunnelCode != null ? (TUNNEL_STATUS[tunnelCode] || `Code ${tunnelCode}`) : '—';
+  const npaLabel    = npaCode    != null ? (NPA_STATUS[npaCode]       || `Code ${npaCode}`)    : '—';
+  const tunnelOk    = tunnelLabel === 'Connected';
+  const npaOk       = npaLabel.startsWith('Connected') || npaLabel === 'Active';
+
+  const statusColor = (ok, val) => val === '—' ? '#6e7681'
+    : ok ? '#3fb950' : '#d29922';
+
+  const dcStatus = state.nsuser?.cache?.DeviceClassificationStatus
+    || state.nsuser?.DeviceClassificationStatus || '—';
+  const dcCustom = state.nsuser?.cache?.DeviceClassificationCustomStatus || '';
+
+  // ── State at collection time ───────────────────────────────────
+  let stateHtml = `<div class="di-kv-grid">`;
+  stateHtml += `<div class="di-kv-row"><span class="di-kv-label">SWG tunnel</span><span class="di-kv-val" style="color:${statusColor(tunnelOk, tunnelLabel)};font-weight:600">${esc(tunnelLabel)}${tunnelCode ? ` <span style="font-size:10px;opacity:.6">(${tunnelCode})</span>` : ''}</span></div>`;
+  stateHtml += `<div class="di-kv-row"><span class="di-kv-label">NPA tunnel</span><span class="di-kv-val" style="color:${statusColor(npaOk, npaLabel)};font-weight:600">${esc(npaLabel)}${npaCode ? ` <span style="font-size:10px;opacity:.6">(${npaCode})</span>` : ''}</span></div>`;
+  stateHtml += `<div class="di-kv-row"><span class="di-kv-label">Device classification</span><span class="di-kv-val">${esc(dcStatus)}${dcCustom ? ` — ${esc(dcCustom)}` : ''}</span></div>`;
+  if (ns.steering_config_name) stateHtml += `<div class="di-kv-row"><span class="di-kv-label">Steering config</span><span class="di-kv-val">${esc(ns.steering_config_name)}</span></div>`;
+  if (s['Gateway'] || s['Gateway POP']) stateHtml += `<div class="di-kv-row"><span class="di-kv-label">Active gateway</span><span class="di-kv-val" style="font-family:monospace">${esc(s['Gateway'] || '')}${s['Gateway POP'] ? ` <span style="opacity:.7">(${esc(s['Gateway POP'])})</span>` : ''}</span></div>`;
+  stateHtml += `</div>`;
+
+  // ── Capability pills ───────────────────────────────────────────
+  const pill = (label, on, hint = '') => {
+    const bg  = on ? 'rgba(63,185,80,.12)' : 'rgba(248,81,73,.08)';
+    const col = on ? '#3fb950' : '#6e7681';
+    return `<span title="${esc(hint)}" style="display:inline-flex;align-items:center;gap:4px;font-size:10px;padding:2px 8px;border-radius:99px;background:${bg};color:${col};font-weight:600;margin:2px 2px 2px 0;white-space:nowrap">${esc(label)}: ${on ? 'On' : 'Off'}</span>`;
+  };
+
+  const isDynamic   = ns.dynamic_steering == 1 || ns.dynamic_steering === true;
+  const hasNpa      = ns.private_apps_off_prem == 1 || ns.private_apps_enabled == 1;
+  const hasFailClose = fc.fail_close === 'true' || fc.fail_close === true || fc.enabled === true || fc.enabled === 'true';
+  const hasDtls     = (cc.protocol || s['Tunnel Protocol'] || '').toLowerCase() === 'dtls';
+  const hasDem      = state.dem?.demServiceEnabled === true;
+  const hasAutoUpd  = cc.allowAutoUpdate === true || cc.allowAutoUpdate === 'true'
+    || cc.clientUpdate?.allowAutoUpdate === true || cc.clientUpdate?.allowAutoUpdate === 'true';
+  const hasEnroll   = cc.enforceClientEnrollment === true || cc.enforceClientEnrollment === 'true';
+  const hasSelfProt = cc.enableClientSelfProtection === true || cc.enableClientSelfProtection === 'true';
+
+  const pillsHtml = [
+    pill('Fail-close', hasFailClose, 'failClose.enabled'),
+    pill('DTLS', hasDtls, 'Tunnel protocol — dtls=On, tls=Off'),
+    pill('Dynamic steer', isDynamic, 'nssteering.json · dynamic_steering'),
+    pill('NPA (off-prem)', hasNpa, 'Private Access enabled off-premises'),
+    pill('DEM', hasDem, 'dem.json · demServiceEnabled'),
+    pill('Auto-update', hasAutoUpd, 'clientConfig · allowAutoUpdate'),
+    pill('Enrollment', hasEnroll, 'clientConfig · enforceClientEnrollment'),
+    pill('Self-protect', hasSelfProt, 'clientConfig · enableClientSelfProtection'),
+  ].join('');
+
+  // ── Bundle details ─────────────────────────────────────────────
+  const detailRows = [
+    ['Host',           s['Hostname'] || s['Host Name']],
+    ['OS',             s['OS Name'] ? `${s['OS Name']} ${s['OS Version'] || ''}`.trim() : null],
+    ['Serial',         s['Serial Number']],
+    ['Client version', s['NS Client Version']],
+    ['Config profile', s['Client Config']],
+    ['Steering config',s['Steering Config'] || ns.steering_config_name],
+    ['Tenant',         s['Tenant Host'] || s['Tenant ID']],
+    ['User',           id.email || id.username],
+  ].filter(([,v]) => v);
+
+  let html = '';
+  html += diSection('State at collection time', 'nsuser.conf · userConfig', stateHtml, true);
+  html += diSection('Capability snapshot', 'from config files', `<div style="padding:8px 12px">${pillsHtml}</div>`, true);
+  if (detailRows.length) html += diSection('Bundle details', '', diKvGrid(detailRows), false);
+  return html;
+}
+
+// ── Steering config panel ─────────────────────────────────────────────────────
+function buildSteeringPanel() {
+  const ns = state.steering;
+  if (!ns) return '';
+
+  const STEER_METHOD = { '0': 'Cloud / Web', '1': 'Cloud Apps Only', '2': 'Web Traffic', '3': 'All Traffic' };
+  const isDynamic = ns.dynamic_steering == 1 || ns.dynamic_steering === true;
+
+  const badge = (v, ok) => `<span style="font-size:10px;font-weight:600;padding:1px 7px;border-radius:3px;background:${ok ? 'rgba(63,185,80,.12)' : 'rgba(248,81,73,.08)'};color:${ok ? '#3fb950' : '#6e7681'}">${esc(v)}</span>`;
+  const methodBadge = (code, noneKey) => {
+    if (ns[noneKey] == 1) return badge('None', false);
+    const name = STEER_METHOD[String(code)] || (code != null ? `Method ${code}` : '—');
+    return badge(name, code == 3 || code == 2 || code == 1);
+  };
+  const enaBadge = v => badge(v == 1 ? 'Enabled' : 'Disabled', v == 1);
+
+  let html = '';
+
+  // ── Global settings ────────────────────────────────────────────
+  const globalRows = [
+    ['Config name',      ns.steering_config_name || '—'],
+    ['Dynamic steering', isDynamic ? 'Enabled' : 'Disabled'],
+    ...(ns.traffic_mode ? [['Traffic mode', ns.traffic_mode]] : []),
+  ];
+  html += diSection('Steering configuration', ns.steering_config_name || '', diKvGrid(globalRows), true);
+
+  if (isDynamic) {
+    const premSection = (prem, label) => {
+      const methodKey = prem === 'off' ? 'offprem_steering_method' : 'onprem_steering_method';
+      const noneKey   = prem === 'off' ? 'offprem_steering_method_none' : 'onprem_steering_method_none';
+      const npaKey    = prem === 'off' ? 'private_apps_off_prem' : 'private_apps_on_prem';
+      const bwanKey   = prem === 'off' ? 'bwan_apps_off_prem' : 'bwan_apps_on_prem';
+      const dnsKey    = prem === 'off' ? 'steer_dns_off_prem' : 'steer_dns_on_prem';
+      const rows = [
+        ['Steering method', `${STEER_METHOD[String(ns[methodKey])] || (ns[noneKey]==1?'None':'—')}`],
+        ['Private Access',  ns[npaKey]  == 1 ? 'Enabled' : 'Disabled'],
+        ['SD-WAN',          ns[bwanKey] == 1 ? 'Enabled' : 'Disabled'],
+        ['DNS Security',    ns[dnsKey]  == 1 ? 'Enabled' : 'Disabled'],
+      ];
+      return diSection(label, '', diKvGrid(rows), true);
+    };
+    html += premSection('off', 'Off-premises');
+    html += premSection('on',  'On-premises');
+  } else {
+    const nonDynMethod = ns.steering_method_none == 1 ? 'None'
+      : ns.firewall_traffic_mode === 'all' || ns.traffic_mode === 'all' ? 'All Traffic'
+      : ns.traffic_mode === 'web' ? 'Web Traffic'
+      : ns.traffic_mode || '—';
+    const rows = [
+      ['Steering method',  nonDynMethod],
+      ['Private Access',   ns.private_apps_off_prem == 1 || ns.private_apps_enabled == 1 ? 'Enabled' : 'Disabled'],
+      ['SD-WAN',           ns.bwan_apps_off_prem == 1 ? 'Enabled' : 'Disabled'],
+      ['DNS Security',     ns.steer_dns_off_prem == 1 || ns.steer_dns == 1 ? 'Enabled' : 'Disabled'],
+    ];
+    html += diSection('Steering method', '', diKvGrid(rows), true);
+  }
+
+  // ── Exception counts ───────────────────────────────────────────
+  const byp = state.bypass || {};
+  const excRows = [];
+  const offCert = (byp['Off Prem']?.certPinnedAppList || []).length;
+  const onCert  = (byp['On Prem']?.certPinnedAppList  || byp.certPinnedAppList || []).length;
+  if (offCert || onCert) excRows.push(['Cert-pinned apps (off/on)', `${offCert} / ${onCert}`]);
+  const npaExc = state.npaExceptions;
+  const npaOff = (npaExc?.npa_exceptions?.off_prem || []).length;
+  const npaOn  = (npaExc?.npa_exceptions?.on_prem  || []).length;
+  if (npaOff || npaOn) excRows.push(['NPA exceptions (off/on)', `${npaOff} / ${npaOn}`]);
+  if (excRows.length) html += diSection('Exception summary', '', diKvGrid(excRows), false);
+
+  return html;
+}
+
+// ── Device classification panel ───────────────────────────────────────────────
+function buildDevClassPanel() {
+  const nu  = state.nsuser;
+  if (!nu) return '';
+
+  const cache = nu.cache || nu;
+  const uc    = nu.userConfig || {};
+
+  const TUNNEL_STATUS = { '0': 'Disabled', '8': 'Disconnected', '21': 'Disabled', '22': 'Connected', '1': 'Connected' };
+  const NPA_STATUS    = { '0': 'Active', '1': 'Connecting', '2': 'Connected (GW)', '3': 'Auth Failed', '4': 'Connected', '5': 'Connected', '6': 'Not enrolled' };
+
+  const dcStatus = cache.DeviceClassificationStatus || nu.DeviceClassificationStatus || 'not configured';
+  const dcCustom = cache.DeviceClassificationCustomStatus || '';
+
+  const statusColor = dcStatus === 'managed' ? '#3fb950'
+    : dcStatus === 'not configured' ? '#6e7681' : '#d29922';
+
+  const statusRows = [['Classification status', `${dcStatus}${dcCustom ? ` — ${dcCustom}` : ''}`]];
+
+  if (uc.tunnelStatus != null) {
+    const lbl = TUNNEL_STATUS[String(uc.tunnelStatus)] || `Code ${uc.tunnelStatus}`;
+    statusRows.push(['SWG tunnel (at collection)', lbl]);
+  }
+  if (uc.npaStatus != null) {
+    const lbl = NPA_STATUS[String(uc.npaStatus)] || `Code ${uc.npaStatus}`;
+    statusRows.push(['NPA tunnel (at collection)', lbl]);
+  }
+  if (state.nsdeviceidstatus?.latest_modified_time) {
+    statusRows.push(['Rule version', state.nsdeviceidstatus.latest_modified_time.split('T')[0]]);
+  }
+
+  let html = diSection('Classification status', dcStatus, diKvGrid(statusRows), true);
+
+  // ── Classification rules from nsdeviceid.json ──────────────────
+  const rules = state.nsdeviceid?.device_classification_rules || {};
+  const ruleEntries = Object.entries(rules);
+  if (ruleEntries.length) {
+    let ruleRows = '';
+    for (const [platform, checks] of ruleEntries) {
+      if (!checks || !Object.keys(checks).length) continue;
+      for (const [checkType, entries] of Object.entries(checks)) {
+        if (!Array.isArray(entries)) continue;
+        const label = checkType.replace(/_check$/, '').replace(/_/g, ' ');
+        const vals = entries.map(e => Object.values(e).join(' · ')).join(', ');
+        ruleRows += `<div class="di-kv-row"><span class="di-kv-label">${esc(platform)} — ${esc(label)}</span><span class="di-kv-val" style="font-family:monospace">${esc(vals)}</span></div>`;
+      }
+    }
+    if (ruleRows) html += diSection('Classification rules', `${ruleEntries.length} platform(s)`, `<div class="di-kv-grid">${ruleRows}</div>`, false);
+  } else if (state.nsdeviceid) {
+    html += `<div style="padding:12px;font-size:11px;color:#6e7681;font-style:italic">No classification rules found in nsdeviceid.json</div>`;
+  }
+
+  return html;
 }
 
 function buildAppInfoCard() {
