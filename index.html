@@ -3063,6 +3063,7 @@ function updateFlowFilters() {
   wrap.style.display = hasNsDebug ? 'inline-flex' : 'none';
 }
 
+let _searchTimer = null;
 function onSearch() {
   const input = document.getElementById('log-search');
   const raw   = input.value;
@@ -3083,7 +3084,8 @@ function onSearch() {
     state.searchQuery   = raw.toLowerCase();
   }
   if (state.globalSearchMode) { runGlobalSearch(); return; }
-  applyFilters();
+  clearTimeout(_searchTimer);
+  _searchTimer = setTimeout(applyFilters, 200);
 }
 
 function applyFilters() {
