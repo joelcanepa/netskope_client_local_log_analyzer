@@ -5290,6 +5290,7 @@ function renderGSLB() {
     </div>
 
     ${buildRttChartSVG(rounds, pops, popList)}
+    ${buildConnectedPopRttSVG(rounds)}
 
     <!-- ── Election Round Analysis ── -->
     <div class="section-title" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
@@ -5306,7 +5307,7 @@ function renderGSLB() {
           <th style="text-align:center">Δ% ≥25%</th>
           <th style="text-align:center">Δms ≥20ms</th>
           <th>Action</th>
-          <th></th>
+          <th style="font-size:10px;color:var(--muted);font-weight:400;white-space:nowrap">View Map</th>
         </tr></thead>
         <tbody>
           ${rounds.map((r, i) => {
@@ -5685,8 +5686,8 @@ const CHART_COLORS = ['#58a6ff','#3fb950','#d29922','#f85149','#a371f7','#ff7b72
 // ── Chart 1: GSLB RTT over time (multi-line) ─────────────────────────────────
 function buildRttChartSVG(rounds, pops, popList) {
   if (rounds.length < 2) return '';
-  const W = 860, H = 240;
-  const ML = 52, MR = 12, MT = 16, MB = 38;
+  const W = 860, H = 170;
+  const ML = 52, MR = 12, MT = 14, MB = 34;
   const cW = W - ML - MR, cH = H - MT - MB;
   const N = rounds.length;
 
@@ -5839,6 +5840,104 @@ function buildRttChartSVG(rounds, pops, popList) {
 function toggleRttPop(uid, ci, checked) {
   const g = document.getElementById(uid + '-pop-' + ci);
   if (g) g.setAttribute('visibility', checked ? 'visible' : 'hidden');
+}
+
+// ── Connected PoP RTT chart (time-based X axis, single winner-RTT line) ──────
+function buildConnectedPopRttSVG(rounds) {
+  const normTs = ts => ts ? ts.slice(0,19).replace(/\//g,'-').replace(' ','T') : null;
+  const pts = rounds.map((r, i) => {
+    const rtt = r._elec?.winnerRtt;
+    const s = normTs(r.ts);
+    if (rtt == null || !s) return null;
+    const ms = new Date(s).getTime();
+    if (isNaN(ms)) return null;
+    return { rtt, ms, pop: r.gslbWinner || '?', switched: r._elec?.switched, ri: i, ts: r.ts || '' };
+  }).filter(Boolean);
+
+  if (pts.length < 2) return '';
+
+  const W = 860, H = 110;
+  const ML = 48, MR = 12, MT = 14, MB = 26;
+  const cW = W - ML - MR, cH = H - MT - MB;
+
+  const tMin = pts[0].ms, tMax = pts[pts.length - 1].ms;
+  const tSpan = Math.max(tMax - tMin, 1);
+
+  const maxRttRaw = Math.max(...pts.map(p => p.rtt));
+  const tickStep = maxRttRaw <= 50 ? 25 : maxRttRaw <= 150 ? 50 : maxRttRaw <= 300 ? 100 : 200;
+  const niceMax = Math.max(Math.ceil(maxRttRaw / tickStep) * tickStep, tickStep * 2);
+
+  const xOf = ms => ML + ((ms - tMin) / tSpan) * cW;
+  const yOf = v  => MT + cH - Math.min(1, Math.max(0, v / niceMax)) * cH;
+  const dotCol = rtt => rtt <= 50 ? '#3fb950' : rtt <= 150 ? '#e3b341' : '#f85149';
+  const uid = 'cpop' + Date.now();
+
+  let s = `<svg id="${uid}" viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible">
+  <rect x="${ML}" y="${MT}" width="${cW}" height="${cH}" fill="#0d1117" rx="2"/>
+  <clipPath id="${uid}-cp"><rect x="${ML}" y="${MT}" width="${cW}" height="${cH}"/></clipPath>`;
+
+  // Zone tints
+  s += `<g clip-path="url(#${uid}-cp)">
+    <rect x="${ML}" y="${yOf(Math.min(50,niceMax)).toFixed(1)}" width="${cW}" height="${(yOf(0)-yOf(Math.min(50,niceMax))).toFixed(1)}" fill="#3fb950" opacity="0.05"/>`;
+  if (niceMax > 50) s += `<rect x="${ML}" y="${yOf(Math.min(150,niceMax)).toFixed(1)}" width="${cW}" height="${(yOf(50)-yOf(Math.min(150,niceMax))).toFixed(1)}" fill="#e3b341" opacity="0.05"/>`;
+  if (niceMax > 150) s += `<rect x="${ML}" y="${yOf(niceMax).toFixed(1)}" width="${cW}" height="${(yOf(150)-yOf(niceMax)).toFixed(1)}" fill="#f85149" opacity="0.05"/>`;
+  s += `</g>`;
+
+  // Grid + Y labels
+  for (let v = 0; v <= niceMax; v += tickStep) {
+    const y = yOf(v).toFixed(1);
+    s += `<line x1="${ML}" y1="${y}" x2="${ML+cW}" y2="${y}" stroke="#21262d" stroke-width="1"/>
+          <text x="${ML-4}" y="${(yOf(v)+4).toFixed(1)}" text-anchor="end" font-size="9" fill="#8b949e">${v}</text>`;
+  }
+  s += `<text x="12" y="${(MT+cH/2).toFixed(1)}" text-anchor="middle" font-size="9" fill="#6e7681" transform="rotate(-90,12,${(MT+cH/2).toFixed(1)})">ms</text>`;
+
+  // PoP-switch vertical markers
+  s += `<g clip-path="url(#${uid}-cp)">`;
+  for (const p of pts.filter(p => p.switched)) {
+    const x = xOf(p.ms).toFixed(1);
+    s += `<line x1="${x}" y1="${MT}" x2="${x}" y2="${MT+cH}" stroke="#f0883e" stroke-width="1" stroke-dasharray="3,2" opacity="0.7"/>`;
+  }
+  s += `</g>`;
+
+  // Line
+  let path = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${xOf(p.ms).toFixed(1)},${yOf(p.rtt).toFixed(1)}`).join(' ');
+  s += `<path d="${path}" fill="none" stroke="#58a6ff" stroke-width="1.5" clip-path="url(#${uid}-cp)" stroke-linejoin="round"/>`;
+
+  // Dots with hover
+  s += `<g clip-path="url(#${uid}-cp)">`;
+  for (const p of pts) {
+    const tip = `<b>${esc(p.pop)}</b> · ${p.rtt}ms / ${esc(p.ts.slice(0,19))}${p.switched ? '<br/>⇄ PoP switched' : ''}`;
+    const r = p.switched ? 5 : 4;
+    s += `<circle cx="${xOf(p.ms).toFixed(1)}" cy="${yOf(p.rtt).toFixed(1)}" r="${r}"
+      fill="${dotCol(p.rtt)}" stroke="#0d1117" stroke-width="1"
+      onmouseenter='showChartTip(event,${JSON.stringify(tip)})' onmouseleave='hideChartTip()' style="cursor:crosshair"/>`;
+  }
+  s += `</g>`;
+
+  // X time labels (pick ~8 evenly spaced)
+  const labelStep = Math.max(1, Math.round(pts.length / 8));
+  const spanDays = tSpan / 86400000;
+  for (let i = 0; i < pts.length; i += labelStep) {
+    const d = new Date(pts[i].ms);
+    const hm = `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+    s += `<text x="${xOf(pts[i].ms).toFixed(1)}" y="${MT+cH+14}" text-anchor="middle" font-size="9" fill="#8b949e">${hm}</text>`;
+  }
+
+  s += `<rect x="${ML}" y="${MT}" width="${cW}" height="${cH}" fill="none" stroke="#30363d" stroke-width="1" rx="2"/></svg>`;
+
+  return `<div style="background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:10px 16px;margin-bottom:20px">
+    <div style="font-size:11px;color:#8b949e;font-weight:600;margin-bottom:6px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      CONNECTED POP RTT
+      <span style="font-weight:400">${pts.length} measurements · selected PoP RTT over time</span>
+    </div>
+    ${s}
+    <div style="margin-top:6px;padding-top:6px;border-top:1px solid #21262d;display:flex;align-items:center;gap:14px;font-size:10px;color:#8b949e">
+      <span>● <span style="color:#3fb950">≤50ms</span></span>
+      <span>● <span style="color:#e3b341">51–150ms</span></span>
+      <span>● <span style="color:#f85149">&gt;150ms</span></span>
+      <span style="color:#f0883e">| PoP switch</span>
+    </div>
+  </div>`;
 }
 
 // ── Chart 2: NPA tunnel stability timeline ───────────────────────────────────
