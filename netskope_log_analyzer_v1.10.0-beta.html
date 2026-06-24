@@ -5801,12 +5801,6 @@ function buildRttChartSVG(rounds, pops, popList) {
           onmouseenter='showChartTip(event,${JSON.stringify(tip)})' onmouseleave='hideChartTip()' style="cursor:crosshair"/>`;
       }
       s += `</g>`;
-      for (const p of wPts) {
-        if (!p.switched) continue;
-        const lx = p.x.toFixed(1);
-        const ly = (p.y < MT + cH / 2 ? p.y + 16 : p.y - 8).toFixed(1);
-        s += `<text x="${lx}" y="${ly}" text-anchor="middle" font-size="9" fill="#f0883e" font-family="monospace" style="pointer-events:none">→ ${esc(p.pop)}</text>`;
-      }
     }
   }
 
