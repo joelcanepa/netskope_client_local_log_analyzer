@@ -718,7 +718,7 @@ body {
 
 <script>
 // ─── Version ─────────────────────────────────────────────────────────────────
-const TOOL_VERSION = '1.9.3';
+const TOOL_VERSION = '1.10.0-beta';
 
 // ─── State ────────────────────────────────────────────────────────────────────
 const state = {
@@ -1258,9 +1258,30 @@ function renderDashboard() {
 }
 
 // ─── Issue Detection ──────────────────────────────────────────────────────────
+// Temporal flap detector: counts connect→disconnect pairs within a sliding window.
+// Returns the number of pairs found (0 = no flap).
+function _detectFlap(allLogs, connectRe, disconnRe, windowMs, threshold) {
+  const evs = [];
+  for (const r of allLogs) {
+    const s = normalizeTs(r.ts);
+    if (!s) continue;
+    const ms = new Date(s).getTime();
+    if (isNaN(ms)) continue;
+    if (connectRe.test(r.raw)) evs.push({ ms, type: 'c' });
+    else if (disconnRe.test(r.raw)) evs.push({ ms, type: 'd' });
+  }
+  evs.sort((a, b) => a.ms - b.ms);
+  let pairs = 0, lastC = -Infinity;
+  for (const ev of evs) {
+    if (ev.type === 'c') { lastC = ev.ms; }
+    else if (ev.ms - lastC <= windowMs) { pairs++; lastC = -Infinity; }
+  }
+  return pairs;
+}
+
 // ─── Issue patterns ───────────────────────────────────────────────────────────
 // Sourced from: NS Client Debug Log Runbook (CDTBA-NS Client Debug Log Runbook)
-// Categories: tunnel | config | npa | driver | auth | ui | noise
+// Categories: tunnel | config | npa | driver | auth | ui | noise | sdwan | gslb
 const ISSUE_PATTERNS = [
 
   // ── TUNNEL MANAGEMENT ──────────────────────────────────────────────────────
@@ -1990,6 +2011,40 @@ const ISSUE_PATTERNS = [
     desc: 'The primary gateway PoP is averaging more than 50ms RTT. Elevated latency can affect real-time applications, NPA tunnel stability, and overall user experience. Persistent high RTT is also a common trigger for NPA keepAlive failures and tunnel reconnects.',
     recommend: 'If DEM (Digital Experience Management) is licensed, enable it to capture per-application performance telemetry — hop-by-hop latency from the endpoint to the PoP and to the destination. This provides the data needed for an ISP or routing escalation. Also review the GSLB tab to confirm the user is connecting to their nearest PoP and is not pinned to a distant one.',
   },
+
+  // ── FLAP DETECTION (temporal correlation) ─────────────────────────────────
+  {
+    id: 'swg-flap', category: 'tunnel', severity: 'high', icon: '🔄',
+    title: 'SWG Tunnel Flapping — Rapid Connect/Disconnect Cycles',
+    match: () => false,
+    matchState: s => {
+      const allLogs = Object.values(s.parsedLogs).flat();
+      const n = _detectFlap(allLogs,
+        /NSTunnel established|nsTunnel established/i,
+        /NSTUNNEL_DISCONNECTED/i,
+        5 * 60 * 1000, 3);
+      return n >= 3 ? `${n} connect→disconnect cycles detected in 5-minute windows` : false;
+    },
+    desc: 'The SWG tunnel connected and immediately disconnected 3 or more times within 5-minute windows. Flapping causes repeated traffic disruption and indicates a severely unstable network path or gateway.',
+    recommend: 'Check WiFi stability and the network path to Netskope gateways. Correlate disconnect reasons (BYNETWORKCHANGE vs SSL errors). If occurring at a specific location, check on-site network equipment.',
+    source: 'GTF — temporal flap detection',
+  },
+  {
+    id: 'npa-flap', category: 'npa', severity: 'medium', icon: '🔄',
+    title: 'NPA Tunnel Flapping — Rapid Connect/Disconnect Cycles',
+    match: () => false,
+    matchState: s => {
+      const allLogs = Object.values(s.parsedLogs).flat();
+      const n = _detectFlap(allLogs,
+        /TLS client established connection/i,
+        /NPA Tunnel is disconnected/i,
+        5 * 60 * 1000, 3);
+      return n >= 3 ? `${n} connect→disconnect cycles detected in 5-minute windows` : false;
+    },
+    desc: 'The NPA tunnel repeatedly connected and disconnected in short succession, dropping all active private app sessions each time.',
+    recommend: 'Check publisher health in the Netskope console. Verify network path stability between the client and publisher. Check if a network change event is cycling NPA reconnects.',
+    source: 'GTF — temporal flap detection',
+  },
 ];
 
 // Category metadata for rendering
@@ -2001,7 +2056,148 @@ const CATEGORIES = {
   auth:   { label: 'Auth',   color: '#bc8cff' },
   ui:     { label: 'UI',     color: '#79c0ff' },
   noise:  { label: 'Noise',  color: '#8b949e' },
+  sdwan:  { label: 'SD-WAN', color: '#f0883e' },
+  gslb:   { label: 'GSLB',   color: '#a371f7' },
 };
+
+// ── GTF Check Engine (beta) ───────────────────────────────────────────────────
+// Checks sourced from GTF Diagnostic Tool (Dan Colwell, v1.9.0).
+// Only simple_count type checks are run here; field_match / filter_pred require
+// the GTF event model and are skipped. Checks already covered by ISSUE_PATTERNS
+// are omitted to avoid duplicate findings.
+const GTF_CHECKS = [
+  // ── FailClose & Tunnel ────────────────────────────────────────────────────
+  { id:'C-FAILCLOSE', sev:'critical', cat:'tunnel', thr:1, thOp:'>=',
+    title:'FailClose — connections blocked',
+    desc:'FailClose Flow Dropped events mean the Netskope client blocked connections because the tunnel was down and FailClose policy was active. Even a single event means the user experienced a connectivity outage.',
+    rx:'Investigate why the tunnel was down — look for preceding tunnel disconnect events. Check if FailClose is appropriate for this user group or if a grace period should be configured.',
+    pat:'/FailClosed flow dropped/i' },
+  { id:'C-TAMPER', sev:'critical', cat:'config', thr:1, thOp:'>=',
+    title:'Configuration tampering detected',
+    desc:'The Netskope client found its cached exception or bypass list had been modified against its signature. Could indicate a security incident where bypass rules were altered.',
+    rx:'Treat as a potential security incident. Force the client to re-download its configuration. Review recent exception policy changes in the tenant.',
+    pat:'/Cached domain list is found to be tampered/i | /Cached bypass list is found to be tampered/i' },
+  { id:'C-TEARDOWN', sev:'critical', cat:'tunnel', thr:3, thOp:'>=',
+    title:'Gateway-initiated tunnel teardown',
+    desc:'Unlike client-side disconnects, this detects the Netskope PoP tearing down the tunnel because it determined the tunnel is unhealthy. Repeated teardowns indicate a regional infrastructure issue.',
+    rx:'Check status.netskope.com for regional incidents. Report to Netskope support with the hcError code from the log.',
+    pat:'/TEAR_DOWN_TUNNEL/i | /Switch gateway due to (?:PROXY|CFW|\\w+) Health Check error/i' },
+  { id:'C-IPC', sev:'critical', cat:'driver', thr:1, thOp:'>=',
+    title:'NSCOM2 IPC communication failure',
+    desc:'NSCOM2 is the inter-process communication channel between stAgentSvc and stAgentUI. When IPC breaks, the UI shows the client as disabled even though the service may still be running.',
+    rx:'Check for third-party DLL injection into stAgentSvc. Restart the Netskope client service. Check Windows Event Viewer for stAgentSvc crash events.',
+    pat:'/NSCOM2 (?:recv failed|client socket connect failed) (?:10054|10061|61)/i' },
+  // ── SD-WAN / BWAN ────────────────────────────────────────────────────────
+  { id:'C-BWAN-ENROLL', sev:'critical', cat:'sdwan', thr:1, thOp:'>=',
+    title:'BWAN enrollment / activation DB failure',
+    desc:'The BWAN activation database is required for enrollment. When corrupt or absent, the client cannot re-enroll and BWAN shows Error indefinitely.',
+    rx:'Delete the BWAN data folder (C:\\ProgramData\\Netskope\\bwan on Windows). Remove the device from the BWAN tenant portal. Restart the NS Client to trigger fresh enrollment.',
+    pat:'/activation db is corrupt|ERROR_DEVICE_CREATION|automatic enrollment failed|BWAN enrollment URL is not set/i' },
+  { id:'C-BWAN-IFACE', sev:'critical', cat:'sdwan', thr:1, thOp:'>=',
+    title:'BWAN virtual interface creation failed',
+    desc:'The WinTun virtual interface (bwanif) is the foundation of all BWAN traffic steering. If it cannot be created, BWAN is completely non-functional.',
+    rx:'Check AV/EDR tamper protection settings. Check Windows GPO for driver installation restrictions. Review setupapi.dev.log for the specific block reason.',
+    pat:'/Failed to setup adapter|Timed out waiting for device query|The device is not ready for use/i' },
+  { id:'C-BWAN-SSL', sev:'critical', cat:'sdwan', thr:5, thOp:'>=',
+    title:'BWAN SSL handshake loop',
+    desc:'Unlike SWG tunnel failures which fall back to TLS, BWAN has no secondary path. If the DTLS handshake fails, the hub is unreachable and all SD-WAN traffic is dropped.',
+    rx:'Verify UDP 443 and UDP 4500 are open to the hub public IP. Check if a firewall is doing deep packet inspection on DTLS traffic.',
+    pat:'/Tunnel status unchanged: SSL CONNECTING/i' },
+  { id:'W-BWAN-SLEEP', sev:'warning', cat:'sdwan', thr:1, thOp:'>=',
+    title:'BWAN disrupted by sleep/resume',
+    desc:'After device sleep or resume, the BWAN virtual interface goes down causing 8-20 seconds of connectivity loss for private apps.',
+    rx:'Update the BWAN client to the latest version. Configure Windows power settings to prevent connected standby on managed devices.',
+    pat:'/AOAC device waking up|Virtual interface stopped.*reverify|waking from connected standby/i' },
+  // ── DTLS / Tunnel Protocol ────────────────────────────────────────────────
+  { id:'W-DTLS-FALLBACK', sev:'warning', cat:'tunnel', thr:1, thOp:'>=',
+    title:'DTLS fell back to TLS',
+    desc:'The client connected via DTLS (UDP 443) but fell back to TLS (TCP 443). DTLS is faster and lower-latency. Fallback means UDP 443 is blocked on this network path, degrading tunnel performance.',
+    rx:'Check if UDP 443 can be opened to Netskope gateway IP ranges. If not possible, set the client config Tunnel Protocol to TLS-only to avoid fallback overhead.',
+    pat:'/Fallback to TLS[,. ]/i' },
+  { id:'W-UPGRADE', sev:'warning', cat:'config', thr:1, thOp:'>=',
+    title:'Auto-upgrade failed',
+    desc:'Failed upgrades leave the client on a stale version. The UpgradeInProgress flag from a failed attempt can permanently block all future upgrades.',
+    rx:'Add AV/EDR exclusions for Netskope installer paths. On Windows: clear HKLM\\SOFTWARE\\Netskope\\StAgent\\UpgradeInProgress registry key if stuck.',
+    pat:'/autoupdate failed on Signature verification|Failed to launch installer|autoupdate failed due to version mismatch|Upgrade already in progress/i' },
+  { id:'W-PROXYHEALTH', sev:'warning', cat:'tunnel', thr:1, thOp:'>=',
+    title:'Proxy health check failed',
+    desc:'The proxy health check validates end-to-end connectivity through the Netskope tunnel. Failure means steered traffic is tunneled but not processed. Can trigger FailClose if enabled.',
+    rx:'Check connectivity to Netskope gateway IPs — tunnel may be established but proxy behind it unreachable. If accompanied by gateway teardowns, the PoP itself may be unhealthy.',
+    pat:'/HealthCheck proxy health check failed|healthCheckStatus:\\s*0/i' },
+  // ── GSLB ─────────────────────────────────────────────────────────────────
+  { id:'C-GSLB-FAIL', sev:'critical', cat:'gslb', thr:1, thOp:'>=',
+    title:'GSLB completely unreachable — fell back to EDNS/LDNS',
+    desc:'The GSLB server (gateway.gslb.goskope.com) was unreachable and the client fell back to DNS-based gateway selection (Traffic Management 1.0). The client will connect to a sub-optimal gateway based on DNS geolocation rather than RTT-measured PoP selection.',
+    rx:'Verify TCP/443 connectivity to gateway.gslb.goskope.com. Check if firewall or proxy is blocking the GSLB footprint API. Verify the NewEdge RTT IP ranges are reachable on TCP/443: 163.116.128.0/17, 162.10.0.0/17.',
+    pat:'/gslb fetch failed, falling back to (?:EDNS|LDNS)/i' },
+  { id:'W-GSLB-REEVAL', sev:'warning', cat:'gslb', thr:5, thOp:'>=',
+    title:'Frequent GSLB re-evaluations',
+    desc:'GSLB re-evaluation happens when the client loses its current tunnel and needs to select a new PoP. Frequent re-evals (5+) indicate the client is repeatedly losing and re-establishing its gateway connection.',
+    rx:'Correlate with tunnel disconnected events — each re-eval should follow a disconnect. If re-evals happen without disconnects, investigate GSLB configuration.',
+    pat:'/gslb re evaluate pops/i' },
+  { id:'W-GSLB-SUBOPTIMAL', sev:'warning', cat:'gslb', thr:5, thOp:'>=',
+    title:'GSLB PoP stuck — switch thresholds not met repeatedly',
+    desc:'The GSLB server returned HTTP 304 (PoP Unchanged) 5+ times, indicating the client is measuring a better PoP but not switching because the dual-threshold is not met (must be >25% better AND >20ms better simultaneously). This device may be stuck on a suboptimal PoP for 75+ minutes.',
+    rx:'Netskope ops can lower per-tenant switch thresholds via polaris-gslb-cli (pop-switch-rtt-threshold-ms, pop-switch-rtt-proportion-threshold). Check for overly sticky tenant overrides.',
+    pat:'/gslb pop unchanged: continuing with \\S+/i' },
+  { id:'W-GSLB-CHURN', sev:'warning', cat:'gslb', thr:3, thOp:'>=',
+    title:'Excessive GSLB PoP switching — RTT instability',
+    desc:'The GSLB server selected a new PoP 3+ times across the log session. Each PoP switch causes a brief tunnel interruption. Normal behavior is 0-1 PoP switches per session.',
+    rx:'Correlate with tunnel disconnect events. Check if RTT instability is network-side. If churn is threshold-driven, Netskope ops can raise pop-switch-rtt-threshold-ms to reduce sensitivity.',
+    pat:'/gslb pop selected: \\S+/i' },
+  // ── Informational ─────────────────────────────────────────────────────────
+  { id:'I-RESTARTS', sev:'info', cat:'noise', thr:2, thOp:'>=',
+    title:'Client restarted multiple times',
+    desc:'Multiple service starts in a single log bundle may indicate client crashes, OS reboots, or deliberate restarts.',
+    rx:'If accompanied by crash findings, investigate crash root cause. Otherwise, check event log for OS reboots or service restarts.',
+    pat:'/={3,} stAgent\\S+ [\\d.]+ starting ={3,}/i' },
+  { id:'I-POSTURE', sev:'info', cat:'driver', thr:1, thOp:'>=',
+    title:'Device posture checks failing',
+    desc:'Failed posture checks cause the device to be classified as unmanaged, potentially changing policy enforcement. Users experience this as unexplained access denials.',
+    rx:'Review Settings → Security Posture in the Netskope console. Enable BitLocker (Windows) or FileVault (macOS) for disk encryption failures.',
+    pat:'/\\w+ check: name \\w+, status 0/i' },
+];
+
+// Parse a GTF logPattern string ("/pat/flags" or "/p1/flags | /p2/flags") into a testable object.
+function _parseGtfRe(pat) {
+  try {
+    const parts = pat.trim().split(/\s*\|\s*(?=\/)/);
+    const res = parts.map(p => {
+      const m = p.trim().match(/^\/(.+)\/([gimsuy]*)$/);
+      return m ? new RegExp(m[1], m[2]) : null;
+    }).filter(Boolean);
+    if (!res.length) return null;
+    if (res.length === 1) return res[0];
+    return { test: s => res.some(r => r.test(s)) };
+  } catch { return null; }
+}
+
+function runGtfChecks(allLogs) {
+  const out = [];
+  for (const chk of GTF_CHECKS) {
+    const re = _parseGtfRe(chk.pat);
+    if (!re) continue;
+    const matches = allLogs.filter(r => { try { return re.test(r.raw); } catch { return false; } });
+    const n = matches.length;
+    const ok = chk.thOp === '>' ? n > chk.thr : n >= chk.thr;
+    if (!ok) continue;
+    const sev = chk.sev === 'critical' ? 'high' : chk.sev === 'warning' ? 'medium' : 'info';
+    out.push({
+      id: 'gtf:' + chk.id,
+      source: 'gtf',
+      category: chk.cat,
+      severity: sev,
+      title: chk.title,
+      desc: chk.desc,
+      recommend: chk.rx,
+      icon: sev === 'high' ? '🔴' : sev === 'medium' ? '🟡' : '🔵',
+      count: n,
+      examples: matches.slice(0, 5).map(r => r.raw),
+      detail: null,
+    });
+  }
+  return out;
+}
 
 // ── Styled log line renderer for findings accordion ──────────────────────────
 function renderStyledLogLine(raw) {
@@ -2041,8 +2237,12 @@ function detectFindings() {
       detected.push({ ...pattern, count: matches.length, examples: matches.slice(0, 5).map(r => r.raw), detail });
     }
   }
+  // Merge GTF checks alongside existing patterns
+  const gtfFindings = runGtfChecks(allLogs);
+  detected.push(...gtfFindings);
+
   const sevOrder = { high: 0, medium: 1, low: 2, info: 3 };
-  const catOrder = { tunnel: 0, config: 1, npa: 2, driver: 3, auth: 4, ui: 5, noise: 6 };
+  const catOrder = { tunnel: 0, config: 1, npa: 2, driver: 3, auth: 4, ui: 5, noise: 6, sdwan: 7, gslb: 8 };
   detected.sort((a, b) => {
     const sd = sevOrder[a.severity] - sevOrder[b.severity];
     return sd !== 0 ? sd : (catOrder[a.category] || 9) - (catOrder[b.category] || 9);
@@ -2182,6 +2382,7 @@ function renderFindingCard(d) {
           <span class="fc-icon">${d.icon || '●'}</span>
           <span class="fc-title">${esc(d.title)}</span>
           <span style="font-size:10px;font-weight:600;padding:1px 7px;border-radius:99px;background:${cat.color}18;color:${cat.color};flex-shrink:0">${cat.label}</span>
+          ${d.source === 'gtf' ? `<span style="font-size:9px;font-weight:700;padding:1px 5px;border-radius:4px;background:#7c3aed22;color:#a371f7;flex-shrink:0;border:1px solid #7c3aed55;letter-spacing:.5px">GTF</span>` : ''}
           ${d.count > 1 ? `<span style="font-size:10px;color:var(--muted)">${d.count.toLocaleString()}×</span>` : ''}
         </div>
         ${subLine ? `<div class="fc-compact-sub" title="${esc(d.detail || d.desc || '')}">${esc(subLine)}</div>` : ''}
