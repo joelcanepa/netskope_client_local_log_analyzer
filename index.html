@@ -2537,8 +2537,8 @@ function detectAppConflictFindings() {
       category: 'apps',
       icon: '📦',
       source: 'app',
-      title: `${isSase ? 'SASE conflict' : 'VPN conflict'}: ${v.vpnLabel}`,
-      desc: `${v.name}${v.version ? ' v' + v.version : ''} detected on this device.${isSase
+      title: `${isSase ? 'SASE conflict' : 'VPN conflict'}: ${v.name}${v.version ? ' v' + v.version : ''}`,
+      desc: `Detected as ${v.vpnLabel}.${isSase
         ? ' This is a competing SASE/SWG product that cannot coexist with Netskope Client — one will intercept traffic the other expects to handle.'
         : ' This VPN client may conflict with the Netskope tunnel, causing packet loss, split-tunneling issues, or connection failures.'}`,
       recommend: isSase
