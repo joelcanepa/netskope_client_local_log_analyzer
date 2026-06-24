@@ -489,14 +489,53 @@ body {
 
 /* ── System Info panel ── */
 .sysinfo-panel {
-  padding: 16px;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: row;
   flex: 1;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
-  align-content: start;
+  overflow: hidden;
 }
+.si-sidebar {
+  width: 176px;
+  flex-shrink: 0;
+  background: var(--bg2);
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  padding: 8px 0;
+}
+.si-side-tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 14px;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+  border-left: 2px solid transparent;
+  user-select: none;
+  transition: background .1s, color .1s;
+  white-space: nowrap;
+}
+.si-side-tab:hover { background: #21262d; color: var(--text); }
+.si-side-tab.active { color: var(--primary); background: var(--bg3); border-left-color: var(--primary); font-weight: 600; }
+.si-side-badge {
+  margin-left: auto;
+  font-size: 10px;
+  background: rgba(248,81,73,.15);
+  color: #f85149;
+  padding: 1px 6px;
+  border-radius: 99px;
+  font-weight: 600;
+}
+.si-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.si-panel { display: none; flex-direction: column; gap: 12px; }
+.si-panel.active { display: flex; }
 .info-card {
   background: var(--bg2);
   border: 1px solid var(--border);
@@ -777,7 +816,10 @@ body {
 
 <!-- System Info -->
   <div class="tab-panel" id="panel-sysinfo">
-    <div class="sysinfo-panel" id="sysinfo-content"></div>
+    <div class="sysinfo-panel">
+      <div class="si-sidebar" id="si-sidebar"></div>
+      <div class="si-content" id="sysinfo-content"></div>
+    </div>
   </div>
 
 </div>
@@ -2316,6 +2358,7 @@ const CATEGORIES = {
   noise:  { label: 'Noise',  color: '#8b949e' },
   sdwan:  { label: 'SD-WAN', color: '#f0883e' },
   gslb:   { label: 'GSLB',   color: '#a371f7' },
+  apps:   { label: 'Apps',   color: '#ff7b72' },
 };
 
 // ── GTF Check Engine (beta) ───────────────────────────────────────────────────
@@ -2474,6 +2517,31 @@ function renderStyledLogLine(raw) {
   </div>`;
 }
 
+function detectAppConflictFindings() {
+  if (!state.appInfo?.vpnClients?.length) return [];
+  return state.appInfo.vpnClients.map(v => {
+    const isSase = v.risk === 'high';
+    const slug = v.vpnLabel.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    return {
+      id: `app-conflict-${slug}`,
+      severity: isSase ? 'high' : 'medium',
+      category: 'apps',
+      icon: '📦',
+      source: 'app',
+      title: `${isSase ? 'SASE conflict' : 'VPN conflict'}: ${v.vpnLabel}`,
+      desc: `${v.name}${v.version ? ' v' + v.version : ''} detected on this device.${isSase
+        ? ' This is a competing SASE/SWG product that cannot coexist with Netskope Client — one will intercept traffic the other expects to handle.'
+        : ' This VPN client may conflict with the Netskope tunnel, causing packet loss, split-tunneling issues, or connection failures.'}`,
+      recommend: isSase
+        ? 'Remove or disable the competing SASE/SWG product. Netskope and products like Zscaler, Prisma Access, or Cisco Umbrella cannot run simultaneously on the same endpoint — both intercept kernel-level traffic.'
+        : 'Disable or remove this VPN client if it is not required. If it must coexist, configure a split-tunnel exclusion or verify that it does not intercept ports 443/UDP-443 used by Netskope.',
+      count: 1,
+      examples: [],
+      detail: `Found in appInfo.log: ${v.name}`,
+    };
+  });
+}
+
 function detectFindings() {
   const allLogs = Object.values(state.parsedLogs).flat();
   const detected = [];
@@ -2498,6 +2566,9 @@ function detectFindings() {
   // Merge GTF checks alongside existing patterns
   const gtfFindings = runGtfChecks(allLogs);
   detected.push(...gtfFindings);
+
+  // App conflict findings from installed applications
+  detected.push(...detectAppConflictFindings());
 
   const sevOrder = { high: 0, medium: 1, low: 2, info: 3 };
   const catOrder = { tunnel: 0, config: 1, npa: 2, driver: 3, auth: 4, ui: 5, noise: 6, sdwan: 7, gslb: 8 };
@@ -2745,62 +2816,63 @@ function findingsSevFilter(sev, btn) {
 
 // ─── System Info ──────────────────────────────────────────────────────────────
 function renderSysInfo() {
-  const el = document.getElementById('sysinfo-content');
   const s = state.sysinfo;
   const ns = state.networkState;
   const ds = state.devState;
-  let html = '';
 
-  // ── Identity ────────────────────────────────────────────────────────
+  // ── Build each panel's HTML ──────────────────────────────────────
+  const panels = {};
+
+  // System panel
   const idRows = [
-    ['Hostname',             s['Hostname'] || s['Host Name']],
-    ['OS',                   s['OS Name']],
-    ['OS Version',           s['OS Version']],
-    ['OS Configuration',     s['OS Configuration']],
-    ['Serial Number',        s['Serial Number']],
-    ['Device Make',          s['Device Make']],
-    ['Device Model',         s['Device Model'] || s['System Model']],
-    ['System Type',          s['System Type']],
-    ['Registered Owner',     s['Registered Owner']],
-    ['Registered Org',       s['Registered Org']],
-    ['Original Install Date',s['Original Install Date']],
-    ['Domain',               s['Domain']],
+    ['Hostname',              s['Hostname'] || s['Host Name']],
+    ['OS',                    s['OS Name']],
+    ['OS Version',            s['OS Version']],
+    ['OS Configuration',      s['OS Configuration']],
+    ['Serial Number',         s['Serial Number']],
+    ['Device Make',           s['Device Make']],
+    ['Device Model',          s['Device Model'] || s['System Model']],
+    ['System Type',           s['System Type']],
+    ['Registered Owner',      s['Registered Owner']],
+    ['Registered Org',        s['Registered Org']],
+    ['Original Install Date', s['Original Install Date']],
+    ['Domain',                s['Domain']],
   ].filter(([,v]) => v);
-  if (idRows.length) html += diSection('Identity', s['OS Name'] || '', diKvGrid(idRows), true);
 
-  // ── Hardware ─────────────────────────────────────────────────────────
   const hwRows = [
-    ['Processor',            s['Processor']],
-    ['Manufacturer',         s['System Manufacturer']],
-    ['Model',                s['System Model']],
-    ['BIOS Version',         s['BIOS Version']],
-    ['Boot Device',          s['Boot Device']],
-    ['Windows Directory',    s['Windows Directory']],
-    ['System Directory',     s['System Directory']],
+    ['Processor',          s['Processor']],
+    ['Manufacturer',       s['System Manufacturer']],
+    ['Model',              s['System Model']],
+    ['BIOS Version',       s['BIOS Version']],
+    ['Boot Device',        s['Boot Device']],
+    ['Windows Directory',  s['Windows Directory']],
+    ['System Directory',   s['System Directory']],
   ].filter(([,v]) => v);
-  if (hwRows.length) html += diSection('Hardware', s['System Manufacturer'] || '', diKvGrid(hwRows), true);
 
-  // ── Memory ───────────────────────────────────────────────────────────
   const memRows = [
-    ['Total Physical',       s['Total Physical Memory']],
-    ['Available Physical',   s['Available Physical Memory']],
-    ['VM Max Size',          s['VM Max Size']],
-    ['VM Available',         s['VM Available']],
-    ['VM In Use',            s['VM In Use']],
-    ['Page File',            s['Page File']],
+    ['Total Physical',     s['Total Physical Memory']],
+    ['Available Physical', s['Available Physical Memory']],
+    ['VM Max Size',        s['VM Max Size']],
+    ['VM Available',       s['VM Available']],
+    ['VM In Use',          s['VM In Use']],
+    ['Page File',          s['Page File']],
   ].filter(([,v]) => v);
-  if (memRows.length) html += diSection('Memory', s['Total Physical Memory'] || '', diKvGrid(memRows), false);
 
-  // ── Environment ───────────────────────────────────────────────────────
   const envRows = [
-    ['Time Zone',            s['Time Zone']],
-    ['System Locale',        s['System Locale']],
-    ['Logon Server',         s['Logon Server']],
-    ['System Boot Time',     s['System Boot Time']],
+    ['Time Zone',          s['Time Zone']],
+    ['System Locale',      s['System Locale']],
+    ['Logon Server',       s['Logon Server']],
+    ['System Boot Time',   s['System Boot Time']],
   ].filter(([,v]) => v);
-  if (envRows.length) html += diSection('Environment', '', diKvGrid(envRows), false);
 
-  // ── Netskope Client ────────────────────────────────────────────────────
+  let sysHtml = '';
+  if (idRows.length) sysHtml += diSection('Identity', s['OS Name'] || '', diKvGrid(idRows), true);
+  if (hwRows.length) sysHtml += diSection('Hardware', s['System Manufacturer'] || '', diKvGrid(hwRows), true);
+  if (memRows.length) sysHtml += diSection('Memory', s['Total Physical Memory'] || '', diKvGrid(memRows), false);
+  if (envRows.length) sysHtml += diSection('Environment', '', diKvGrid(envRows), false);
+  if (sysHtml) panels.system = { icon: '🖥️', label: 'System', html: sysHtml };
+
+  // Client panel
   const nsClientFields = [
     'NS Client Version','Tenant ID','Tenant Host','Org Key',
     'Gateway','Gateway POP','Tunnel Status','Tunnel Protocol',
@@ -2809,14 +2881,13 @@ function renderSysInfo() {
     'Tunnel Status Code','NPA Status Code','Client Status Code',
   ];
   const nsRows = nsClientFields.map(k => [k, s[k]]).filter(([,v]) => v);
-  if (nsRows.length) html += diSection('Netskope Client', s['NS Client Version'] || '', diKvGrid(nsRows), true);
+  let clientHtml = '';
+  if (nsRows.length) clientHtml += diSection('Netskope Client', s['NS Client Version'] || '', diKvGrid(nsRows), true);
+  if (ds && Object.keys(ds).length) clientHtml += diSection('Device State', ds['Classification'] || '', diKvGrid(Object.entries(ds)), true);
+  if (clientHtml) panels.client = { icon: '🛡️', label: 'Netskope Client', html: clientHtml };
 
-  // ── Device State ───────────────────────────────────────────────────────
-  if (ds && Object.keys(ds).length) {
-    html += diSection('Device State', ds['Classification'] || '', diKvGrid(Object.entries(ds)), true);
-  }
-
-  // ── Network Interfaces ────────────────────────────────────────────────
+  // Network panel
+  let netHtml = '';
   if (ns && ns.nics.length) {
     const activeCount = ns.nics.filter(n => n.active).length;
     const nicHtml = ns.nics.map(n => {
@@ -2834,43 +2905,40 @@ function renderSysInfo() {
         <div class="di-nic-detail">${parts || '<span style="opacity:.5">no IP assigned</span>'}</div>
       </div>`;
     }).join('');
-    html += diSection('Network Interfaces', `${activeCount} active · ${ns.nics.length} total`, nicHtml, true);
+    netHtml += diSection('Network Interfaces', `${activeCount} active · ${ns.nics.length} total`, nicHtml, true);
   }
-
-  // ── Routing Table ─────────────────────────────────────────────────────
   if (ns && ns.routes.length) {
     const rtId = 'di-rt-' + Date.now();
     let rtHtml = `<div class="di-rt-filter"><input type="text" placeholder="Filter routes…" oninput="diRtFilter('${rtId}', this.value)"></div>`;
     if (ns.isWin) {
-      rtHtml += `<div class="di-rt-hdr di-rt-win"><span>Destination</span><span>Netmask</span><span>Gateway</span><span>Interface</span><span>Metric</span></div>
-        <div id="${rtId}">`;
-      rtHtml += ns.routes.map(r => {
-        const def = r.dest === '0.0.0.0';
-        return `<div class="di-rt-row di-rt-win${def ? ' rt-default' : ''}" data-rt="${esc((r.dest+' '+r.mask+' '+r.gw+' '+r.iface).toLowerCase())}">
-          <span>${esc(r.dest)}</span><span>${esc(r.mask)}</span><span>${esc(r.gw)}</span><span>${esc(r.iface)}</span><span>${esc(r.metric)}</span>
-        </div>`;
-      }).join('');
+      rtHtml += `<div class="di-rt-hdr di-rt-win"><span>Destination</span><span>Netmask</span><span>Gateway</span><span>Interface</span><span>Metric</span></div><div id="${rtId}">`;
+      rtHtml += ns.routes.map(r => `<div class="di-rt-row di-rt-win${r.dest==='0.0.0.0'?' rt-default':''}" data-rt="${esc((r.dest+' '+r.mask+' '+r.gw+' '+r.iface).toLowerCase())}"><span>${esc(r.dest)}</span><span>${esc(r.mask)}</span><span>${esc(r.gw)}</span><span>${esc(r.iface)}</span><span>${esc(r.metric)}</span></div>`).join('');
     } else {
-      rtHtml += `<div class="di-rt-hdr di-rt-mac"><span>Destination</span><span>Gateway</span><span>Flags</span><span>Interface</span></div>
-        <div id="${rtId}">`;
-      rtHtml += ns.routes.map(r => {
-        const def = r.dest === 'default';
-        return `<div class="di-rt-row di-rt-mac${def ? ' rt-default' : ''}" data-rt="${esc((r.dest+' '+r.gw).toLowerCase())}">
-          <span>${esc(r.dest)}</span><span>${esc(r.gw)}</span><span>${esc(r.flags||'')}</span><span>${esc(r.netif||'')}</span>
-        </div>`;
-      }).join('');
+      rtHtml += `<div class="di-rt-hdr di-rt-mac"><span>Destination</span><span>Gateway</span><span>Flags</span><span>Interface</span></div><div id="${rtId}">`;
+      rtHtml += ns.routes.map(r => `<div class="di-rt-row di-rt-mac${r.dest==='default'?' rt-default':''}" data-rt="${esc((r.dest+' '+r.gw).toLowerCase())}"><span>${esc(r.dest)}</span><span>${esc(r.gw)}</span><span>${esc(r.flags||'')}</span><span>${esc(r.netif||'')}</span></div>`).join('');
     }
     rtHtml += `</div><div id="${rtId}-empty" style="display:none;padding:8px 14px;font-size:11px;color:#6e7681;font-style:italic">No matching routes</div>`;
-    html += diSection('Routing Table', `${ns.routes.length} routes`, rtHtml, false);
+    netHtml += diSection('Routing Table', `${ns.routes.length} routes`, rtHtml, false);
   }
+  if (netHtml) panels.network = { icon: '🌐', label: 'Network', html: netHtml };
 
-  // ── Installed Hotfixes ────────────────────────────────────────────────
+  // Applications panel
+  const appCard = buildAppInfoCard();
+  if (appCard) panels.apps = { icon: '📦', label: 'Applications', html: appCard, badge: state.appInfo?.vpnClients?.length || 0 };
+
+  // Bypass & NPA panel
+  const bypassCard = buildBypassCard();
+  const npaCard    = buildNpaExceptionsCard();
+  const bpHtml     = (bypassCard || '') + (npaCard || '');
+  if (bpHtml.trim()) panels.bypass = { icon: '🔒', label: 'Bypass & NPA', html: bpHtml };
+
+  // Hotfixes panel
   if (s._hotfixes && s._hotfixes.length) {
     const pills = s._hotfixes.map(k => `<span class="di-hotfix-pill">${esc(k)}</span>`).join('');
-    html += diSection('Installed Hotfixes', `${s._hotfixes.length} patches`, `<div class="di-hotfix-list">${pills}</div>`, false);
+    panels.hotfixes = { icon: '🩹', label: 'Hotfixes', html: `<div class="di-hotfix-list" style="padding:12px">${pills}</div>`, badge: 0 };
   }
 
-  // ── DEM ───────────────────────────────────────────────────────────────
+  // DEM panel
   if (state.dem) {
     const d = state.dem;
     const demRows = [
@@ -2878,18 +2946,35 @@ function renderSysInfo() {
       ...(d.networkProbe ? [['Probe Name', d.networkProbe.name],['Frequency', d.networkProbe.frequency+'m']] : []),
       ...(d.npa ? [['NPA Targets', d.npa.join(', ')]] : []),
     ];
-    html += diSection('DEM Configuration', d.demServiceEnabled ? 'Enabled' : 'Disabled', diKvGrid(demRows), false);
+    panels.dem = { icon: '📡', label: 'DEM', html: diSection('DEM Configuration', d.demServiceEnabled ? 'Enabled' : 'Disabled', diKvGrid(demRows), true) };
   }
 
-  // ── Apps + Bypass + NPA ───────────────────────────────────────────────
-  const appCard = buildAppInfoCard();
-  if (appCard) html += `<div style="grid-column:1/-1">${appCard}</div>`;
-  const bypassCard = buildBypassCard();
-  if (bypassCard) html += `<div style="grid-column:1/-1">${bypassCard}</div>`;
-  const npaCard = buildNpaExceptionsCard();
-  if (npaCard) html += `<div style="grid-column:1/-1">${npaCard}</div>`;
+  // ── Build sidebar nav ────────────────────────────────────────────
+  const panelKeys = Object.keys(panels);
+  if (!panelKeys.length) return;
+  const activePanel = state._siActivePanel && panels[state._siActivePanel] ? state._siActivePanel : panelKeys[0];
+  state._siActivePanel = activePanel;
 
-  el.innerHTML = html;
+  const sidebar = document.getElementById('si-sidebar');
+  sidebar.innerHTML = panelKeys.map(key => {
+    const p = panels[key];
+    const badgeHtml = p.badge > 0
+      ? `<span class="si-side-badge">${p.badge}</span>`
+      : '';
+    return `<div class="si-side-tab${key === activePanel ? ' active' : ''}" onclick="siSwitch('${key}',this)">${p.icon} ${esc(p.label)}${badgeHtml}</div>`;
+  }).join('');
+
+  // ── Build content panels ─────────────────────────────────────────
+  const content = document.getElementById('sysinfo-content');
+  content.innerHTML = panelKeys.map(key =>
+    `<div class="si-panel${key === activePanel ? ' active' : ''}" id="si-panel-${key}">${panels[key].html}</div>`
+  ).join('');
+}
+
+function siSwitch(key, tab) {
+  state._siActivePanel = key;
+  document.querySelectorAll('.si-side-tab').forEach(t => t.classList.toggle('active', t === tab));
+  document.querySelectorAll('.si-panel').forEach(p => p.classList.toggle('active', p.id === 'si-panel-' + key));
 }
 
 function diToggle(id) {
