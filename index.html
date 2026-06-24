@@ -710,6 +710,45 @@ body {
 
 </div>
 
+<!-- TOS / Disclaimer overlay -->
+<div id="tos-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:9999;align-items:center;justify-content:center;padding:16px">
+  <div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;max-width:620px;width:100%;max-height:90vh;overflow-y:auto;box-shadow:0 24px 64px rgba(0,0,0,.6)">
+    <div style="padding:24px 28px 0">
+      <div style="display:flex;align-items:flex-start;gap:14px;margin-bottom:20px">
+        <div style="font-size:32px;flex-shrink:0">⚠️</div>
+        <div>
+          <h2 style="margin:0 0 4px;font-size:17px;color:var(--text)">Important Notice — Before You Continue</h2>
+          <p style="margin:0;font-size:12px;color:var(--muted)">Netskope Client Log Analyzer · Community Diagnostic Tool</p>
+        </div>
+      </div>
+      <div style="font-size:13px;line-height:1.6;color:var(--text)">
+        <h3 style="font-size:12px;font-weight:700;color:var(--warning);text-transform:uppercase;letter-spacing:.05em;margin:0 0 6px">Third-Party Tool — No Netskope Affiliation</h3>
+        <p style="margin:0 0 16px;color:var(--muted)"><strong style="color:var(--text)">This is an independent, community-developed diagnostic tool.</strong> It was not developed by, endorsed by, or affiliated with Netskope, Inc. in any way. Netskope provides no support or warranty for this tool or its results.</p>
+
+        <h3 style="font-size:12px;font-weight:700;color:var(--warning);text-transform:uppercase;letter-spacing:.05em;margin:0 0 6px">Data Handling — Stays In Your Browser</h3>
+        <p style="margin:0 0 16px;color:var(--muted)"><strong style="color:var(--text)">All log data is processed entirely within your local browser.</strong> No diagnostic data, log content, or personally identifiable information is transmitted to any external server or third party. Files are parsed in-browser and never uploaded outside your device.</p>
+
+        <h3 style="font-size:12px;font-weight:700;color:var(--warning);text-transform:uppercase;letter-spacing:.05em;margin:0 0 6px">Sensitive Data Advisory</h3>
+        <p style="margin:0 0 16px;color:var(--muted)">Netskope log bundles may contain usernames, IP addresses, hostnames, and network metadata. <strong style="color:var(--text)">You are responsible for ensuring analysis of these logs complies with your organisation's data policies and applicable regulations</strong> (GDPR, CCPA, HIPAA, etc.).</p>
+
+        <h3 style="font-size:12px;font-weight:700;color:var(--warning);text-transform:uppercase;letter-spacing:.05em;margin:0 0 6px">No Warranty — Use At Your Own Risk</h3>
+        <p style="margin:0 0 20px;color:var(--muted)">This tool is provided <strong style="color:var(--text)">"as is," without warranty of any kind.</strong> Diagnostic output should be independently verified before making configuration or security decisions.</p>
+      </div>
+    </div>
+    <div style="padding:16px 28px 24px;border-top:1px solid var(--border);display:flex;align-items:center;gap:14px">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;flex:1;font-size:12px;color:var(--muted);user-select:none">
+        <input type="checkbox" id="tos-checkbox" onchange="tosOnCheck()" style="width:15px;height:15px;cursor:pointer;accent-color:var(--primary)">
+        I understand and agree to the above terms
+      </label>
+      <button id="tos-accept-btn" disabled onclick="tosAccept()"
+        style="padding:8px 20px;border-radius:6px;border:none;background:var(--primary);color:#000;font-size:13px;font-weight:600;cursor:pointer;opacity:.4;transition:opacity .15s"
+        onmouseenter="if(!this.disabled)this.style.opacity='0.85'" onmouseleave="if(!this.disabled)this.style.opacity='1'">
+        Continue →
+      </button>
+    </div>
+  </div>
+</div>
+
 <!-- Loading overlay -->
 <div class="loading-overlay" id="loading">
   <div class="spinner"></div>
@@ -1078,9 +1117,42 @@ function processFiles() {
 }
 
 // Keep badge in sync with the constant (runs once on page load and on re-render)
+// ─── Terms of Use ─────────────────────────────────────────────────────────────
+// Increment TOS_VERSION only when the terms text materially changes.
+const TOS_VERSION = '1.0';
+const TOS_KEY = 'nla_tos_agreed';
+
+function tosInit() {
+  const overlay = document.getElementById('tos-overlay');
+  if (!overlay) return;
+  try {
+    if (localStorage.getItem(TOS_KEY) === TOS_VERSION) { overlay.style.display = 'none'; return; }
+  } catch { /* localStorage unavailable — show the modal */ }
+  overlay.style.display = 'flex';
+  document.body.style.overflow = 'hidden';
+}
+
+function tosOnCheck() {
+  const btn = document.getElementById('tos-accept-btn');
+  const cb  = document.getElementById('tos-checkbox');
+  if (!btn) return;
+  btn.disabled = !cb?.checked;
+  btn.style.opacity = cb?.checked ? '1' : '0.4';
+  btn.style.cursor  = cb?.checked ? 'pointer' : 'default';
+}
+
+function tosAccept() {
+  const cb = document.getElementById('tos-checkbox');
+  if (!cb?.checked) return;
+  try { localStorage.setItem(TOS_KEY, TOS_VERSION); } catch {}
+  const overlay = document.getElementById('tos-overlay');
+  if (overlay) { overlay.style.display = 'none'; document.body.style.overflow = ''; }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   const badge = document.getElementById('version-badge');
   if (badge) badge.textContent = 'v' + TOOL_VERSION;
+  tosInit();
 });
 
 // ─── Render ───────────────────────────────────────────────────────────────────
@@ -4552,7 +4624,46 @@ function parseGSLBData(isRetry = false) {
     p.avg    = Math.round(rtts.reduce((s,v) => s+v, 0) / rtts.length);
   }
 
-  state.gslb = { rounds, pops };
+  // ── Per-round election analysis (dual-threshold logic) ───────────────────
+  // Each round: was the selected PoP already best? Were switch thresholds met?
+  // Δ% ≥25% AND Δms ≥20ms must BOTH be true for GSLB to switch PoPs.
+  let prevWinner = null, elecPopChanges = 0, elecAnomalies = 0;
+  const elecFailures = [];
+  for (const round of rounds) {
+    const winner = round.gslbWinner;
+    const sortedRtts = [...round.rtts].sort((a, b) => a.rtt - b.rtt);
+    const bestByRtt = sortedRtts[0];
+    const isBestSel = bestByRtt?.pop === winner;
+
+    const winnerRtt = winner ? (sortedRtts.find(r => r.pop === winner)?.rtt ?? null) : null;
+
+    // Best candidate = PoP with lowest RTT that is NOT the elected winner
+    const candEntry = isBestSel ? sortedRtts[1] : sortedRtts[0];
+    const bestCand    = isBestSel ? (candEntry?.pop || null) : (bestByRtt?.pop || null);
+    const bestCandRtt = isBestSel ? (candEntry?.rtt ?? null) : (bestByRtt?.rtt ?? null);
+
+    // How much better is the best candidate vs the currently selected PoP?
+    const deltaMs  = (winnerRtt != null && bestCandRtt != null && !isBestSel)
+      ? Math.max(0, winnerRtt - bestCandRtt) : 0;
+    const deltaPct = (deltaMs > 0 && winnerRtt)
+      ? (deltaMs / winnerRtt) * 100 : 0;
+
+    const propMet = deltaPct >= 25;
+    const absMet  = deltaMs >= 20;
+    const thresholdMet = propMet && absMet;
+    const unchanged = !!round.curPop;   // server returned HTTP 304
+    const suboptimal = unchanged && thresholdMet;  // anomaly: threshold met but 304
+
+    const switched = !unchanged && prevWinner !== null && winner !== null && winner !== prevWinner;
+    if (switched) elecPopChanges++;
+    if (suboptimal) elecAnomalies++;
+
+    round._elec = { isBestSel, winnerRtt, bestCand, bestCandRtt,
+      deltaMs, deltaPct, propMet, absMet, thresholdMet, unchanged, suboptimal, switched };
+    if (winner) prevWinner = winner;
+  }
+
+  state.gslb = { rounds, pops, popChanges: elecPopChanges, anomalies: elecAnomalies, failures: elecFailures };
 
   // Auto-fallback: if primary log has no GSLB data, try rotated logs in order
   if (!rounds.length && !isRetry && !state.gslbFile) {
@@ -4650,6 +4761,184 @@ function changeGSLBFile(fname) {
   renderGSLB();
 }
 
+// ─── GSLB PoP Reference Data ─────────────────────────────────────────────────
+const GSLB_POP_DATA = [
+  {code:'AKL',lat:-37.01,lng:174.79,city:'Auckland',country:'New Zealand',region:'Oceania',pops:["AKL1"]},
+  {code:'BNE',lat:-27.38,lng:153.12,city:'Brisbane',country:'Australia',region:'Oceania',pops:["BNE1"]},
+  {code:'MEL',lat:-37.67,lng:144.84,city:'Melbourne',country:'Australia',region:'Oceania',pops:["MEL1","MEL2","MEL3"]},
+  {code:'PER',lat:-31.94,lng:115.97,city:'Perth',country:'Australia',region:'Oceania',pops:["PER1"]},
+  {code:'SYD',lat:-33.94,lng:151.18,city:'Sydney',country:'Australia',region:'Oceania',pops:["SYD1","SYD2"]},
+  {code:'AMS',lat:52.31,lng:4.76,city:'Amsterdam',country:'Netherlands',region:'Europe',pops:["AM2","AMS1"]},
+  {code:'BCN',lat:41.3,lng:2.08,city:'Barcelona',country:'Spain',region:'Europe',pops:["BCN1"]},
+  {code:'BRU',lat:50.9,lng:4.48,city:'Brussels',country:'Belgium',region:'Europe',pops:["BRU1"]},
+  {code:'DUB',lat:53.42,lng:-6.27,city:'Dublin',country:'Ireland',region:'Europe',pops:["DUB1"]},
+  {code:'DUS',lat:51.29,lng:6.77,city:'Düsseldorf',country:'Germany',region:'Europe',pops:["DUS1"]},
+  {code:'FRA',lat:50.03,lng:8.57,city:'Frankfurt',country:'Germany',region:'Europe',pops:["FR4","FRA1","FRA2"]},
+  {code:'GVA',lat:46.24,lng:6.11,city:'Geneva',country:'Switzerland',region:'Europe',pops:["GVA1"]},
+  {code:'HEL',lat:60.32,lng:24.97,city:'Helsinki',country:'Finland',region:'Europe',pops:["HEL1"]},
+  {code:'LIS',lat:38.77,lng:-9.13,city:'Lisbon',country:'Portugal',region:'Europe',pops:["LIS1"]},
+  {code:'LON',lat:51.51,lng:-0.12,city:'London',country:'United Kingdom',region:'Europe',pops:["LON1","LON2","LON3"]},
+  {code:'MAD',lat:40.47,lng:-3.56,city:'Madrid',country:'Spain',region:'Europe',pops:["MAD1","MAD2"]},
+  {code:'MAN',lat:53.35,lng:-2.27,city:'Manchester',country:'United Kingdom',region:'Europe',pops:["MAN1"]},
+  {code:'MRS',lat:43.44,lng:5.22,city:'Marseille',country:'France',region:'Europe',pops:["MRS1"]},
+  {code:'MIL',lat:45.63,lng:8.72,city:'Milan',country:'Italy',region:'Europe',pops:["MIL1","MIL2"]},
+  {code:'MUC',lat:48.35,lng:11.79,city:'Munich',country:'Germany',region:'Europe',pops:["MUC1"]},
+  {code:'PAR',lat:48.86,lng:2.35,city:'Paris',country:'France',region:'Europe',pops:["PAR1","PAR2","PAR3"]},
+  {code:'PRG',lat:50.1,lng:14.26,city:'Prague',country:'Czech Republic',region:'Europe',pops:["PRG1"]},
+  {code:'RTM',lat:51.96,lng:4.44,city:'Rotterdam',country:'Netherlands',region:'Europe',pops:["RTM1","RTM2"]},
+  {code:'STO',lat:59.65,lng:17.92,city:'Stockholm',country:'Sweden',region:'Europe',pops:["STO1"]},
+  {code:'VIE',lat:48.11,lng:16.57,city:'Vienna',country:'Austria',region:'Europe',pops:["VIE1"]},
+  {code:'WAW',lat:52.17,lng:20.97,city:'Warsaw',country:'Poland',region:'Europe',pops:["WAW1"]},
+  {code:'ZUR',lat:47.46,lng:8.55,city:'Zurich',country:'Switzerland',region:'Europe',pops:["ZUR1","ZUR2"]},
+  {code:'ATL',lat:33.64,lng:-84.43,city:'Atlanta',country:'USA',region:'North America',pops:["ATL1","ATL2"]},
+  {code:'BOS',lat:42.36,lng:-71.0,city:'Boston',country:'USA',region:'North America',pops:["BOS1"]},
+  {code:'YYC',lat:51.13,lng:-114.01,city:'Calgary',country:'Canada',region:'North America',pops:["YYC1"]},
+  {code:'ORD',lat:41.98,lng:-87.91,city:'Chicago',country:'USA',region:'North America',pops:["ORD1","ORD2"]},
+  {code:'DFW',lat:32.9,lng:-97.04,city:'Dallas',country:'USA',region:'North America',pops:["DFW1","DFW3","DFW4"]},
+  {code:'DEN',lat:39.86,lng:-104.67,city:'Denver',country:'USA',region:'North America',pops:["DEN1"]},
+  {code:'HNL',lat:21.33,lng:-157.92,city:'Honolulu',country:'USA',region:'North America',pops:["HNL1"]},
+  {code:'LAX',lat:33.94,lng:-118.41,city:'Los Angeles',country:'USA',region:'North America',pops:["LAX1","LAX2"]},
+  {code:'MIA',lat:25.79,lng:-80.29,city:'Miami',country:'USA',region:'North America',pops:["MIA1","MIA2"]},
+  {code:'YMQ',lat:45.46,lng:-73.75,city:'Montreal',country:'Canada',region:'North America',pops:["YMQ1","YMQ3","YMQ4"]},
+  {code:'NYC',lat:40.71,lng:-74.0,city:'New York',country:'USA',region:'North America',pops:["NYC1","NYC2","NYC3","NYC4"]},
+  {code:'PHL',lat:39.87,lng:-75.24,city:'Philadelphia',country:'USA',region:'North America',pops:["PHL1"]},
+  {code:'PHX',lat:33.44,lng:-112.01,city:'Phoenix',country:'USA',region:'North America',pops:["PHX1"]},
+  {code:'QRO',lat:20.62,lng:-100.18,city:'Querétaro',country:'Mexico',region:'North America',pops:["QRO1"]},
+  {code:'SFO',lat:37.62,lng:-122.38,city:'San Francisco',country:'USA',region:'North America',pops:["SFO1"]},
+  {code:'SJC',lat:37.36,lng:-121.93,city:'San Jose',country:'USA',region:'North America',pops:["SJC1","SJC2","SV5"]},
+  {code:'SEA',lat:47.45,lng:-122.31,city:'Seattle',country:'USA',region:'North America',pops:["SEA2"]},
+  {code:'STL',lat:38.75,lng:-90.37,city:'St. Louis',country:'USA',region:'North America',pops:["STL1"]},
+  {code:'YYZ',lat:43.68,lng:-79.63,city:'Toronto',country:'Canada',region:'North America',pops:["YYZ1","YYZ3","YYZ4"]},
+  {code:'YVR',lat:49.19,lng:-123.18,city:'Vancouver',country:'Canada',region:'North America',pops:["YVR1"]},
+  {code:'IAD',lat:38.95,lng:-77.45,city:'Washington DC',country:'USA',region:'North America',pops:["IAD2","IAD4","IAD5","IAD6"]},
+  {code:'BKK',lat:13.69,lng:100.75,city:'Bangkok',country:'Thailand',region:'Asia',pops:["BKK1"]},
+  {code:'PEK',lat:40.08,lng:116.58,city:'Beijing',country:'China',region:'Asia',pops:["PEK1"]},
+  {code:'MAA',lat:12.99,lng:80.17,city:'Chennai',country:'India',region:'Asia',pops:["MAA1","MAA2"]},
+  {code:'DEL',lat:28.57,lng:77.1,city:'Delhi',country:'India',region:'Asia',pops:["DEL1","DEL2"]},
+  {code:'HKG',lat:22.31,lng:114.17,city:'Hong Kong',country:'China',region:'Asia',pops:["HKG1","HKG2"]},
+  {code:'HYD',lat:17.24,lng:78.43,city:'Hyderabad',country:'India',region:'Asia',pops:["HYD1"]},
+  {code:'ICN',lat:37.46,lng:126.44,city:'Incheon',country:'South Korea',region:'Asia',pops:["ICN1"]},
+  {code:'IST',lat:41.27,lng:28.75,city:'Istanbul',country:'Turkey',region:'Asia',pops:["IST1"]},
+  {code:'JKT',lat:-6.13,lng:106.66,city:'Jakarta',country:'Indonesia',region:'Asia',pops:["JKT1"]},
+  {code:'CCU',lat:22.65,lng:88.45,city:'Kolkata',country:'India',region:'Asia',pops:["CCU1"]},
+  {code:'KUL',lat:2.75,lng:101.71,city:'Kuala Lumpur',country:'Malaysia',region:'Asia',pops:["KUL1"]},
+  {code:'MNL',lat:14.51,lng:121.02,city:'Manila',country:'Philippines',region:'Asia',pops:["MNL1"]},
+  {code:'BOM',lat:19.09,lng:72.87,city:'Mumbai',country:'India',region:'Asia',pops:["BOM1","BOM2","BOM3"]},
+  {code:'OSA',lat:34.79,lng:135.44,city:'Osaka',country:'Japan',region:'Asia',pops:["OSA1","OSA2"]},
+  {code:'PVG',lat:31.14,lng:121.81,city:'Shanghai',country:'China',region:'Asia',pops:["PVG1","PVG2"]},
+  {code:'SZX',lat:22.64,lng:113.81,city:'Shenzhen',country:'China',region:'Asia',pops:["SZX1"]},
+  {code:'SIN',lat:1.36,lng:103.99,city:'Singapore',country:'Singapore',region:'Asia',pops:["SIN1","SIN2","SIN3"]},
+  {code:'TPE',lat:25.07,lng:121.23,city:'Taipei',country:'Taiwan',region:'Asia',pops:["TPE1"]},
+  {code:'NRT',lat:35.77,lng:140.39,city:'Tokyo',country:'Japan',region:'Asia',pops:["NRT2","NRT3"]},
+  {code:'BOG',lat:4.7,lng:-74.14,city:'Bogotá',country:'Colombia',region:'South America',pops:["BOG1","BOG2"]},
+  {code:'BSB',lat:-15.87,lng:-47.92,city:'Brasília',country:'Brazil',region:'South America',pops:["BSB1"]},
+  {code:'BUE',lat:-34.82,lng:-58.54,city:'Buenos Aires',country:'Argentina',region:'South America',pops:["BUE1"]},
+  {code:'LIM',lat:-12.02,lng:-77.11,city:'Lima',country:'Peru',region:'South America',pops:["LIM1"]},
+  {code:'GIG',lat:-22.81,lng:-43.25,city:'Rio de Janeiro',country:'Brazil',region:'South America',pops:["GIG1"]},
+  {code:'SCL',lat:-33.39,lng:-70.79,city:'Santiago',country:'Chile',region:'South America',pops:["SCL1","SCL2"]},
+  {code:'SAO',lat:-23.43,lng:-46.47,city:'São Paulo',country:'Brazil',region:'South America',pops:["SAO1","SAO3","SAO4"]},
+  {code:'CPT',lat:-33.96,lng:18.6,city:'Cape Town',country:'South Africa',region:'Africa',pops:["CPT1"]},
+  {code:'JNB',lat:-26.13,lng:28.24,city:'Johannesburg',country:'South Africa',region:'Africa',pops:["JNB1"]},
+  {code:'LOS',lat:6.58,lng:3.32,city:'Lagos',country:'Nigeria',region:'Africa',pops:["LOS1"]},
+  {code:'DXB',lat:25.25,lng:55.36,city:'Dubai',country:'UAE',region:'Middle East',pops:["DXB1","DXB2"]},
+  {code:'JED',lat:21.68,lng:39.16,city:'Jeddah',country:'Saudi Arabia',region:'Middle East',pops:["JED1","JED2"]},
+  {code:'MCT',lat:23.59,lng:58.28,city:'Muscat',country:'Oman',region:'Middle East',pops:["MCT1"]},
+  {code:'RUH',lat:24.96,lng:46.7,city:'Riyadh',country:'Saudi Arabia',region:'Middle East',pops:["RUH1","RUH2"]},
+  {code:'TLV',lat:32.01,lng:34.88,city:'Tel Aviv',country:'Israel',region:'Middle East',pops:["TLV1"]},
+];
+
+let _elecDetailRow = null, _elecDetailSrc = null;
+
+function toggleElecDetail(tr, idx) {
+  if (_elecDetailSrc === tr) { closeElecDetail(); return; }
+  closeElecDetail();
+  _elecDetailSrc = tr;
+  tr.style.background = 'var(--bg3)';
+  const round = state.gslb.rounds[idx];
+  if (!round || !round.rtts.length) return;
+  const maxRtt = Math.max(...round.rtts.map(r => r.rtt));
+  const sorted = [...round.rtts].sort((a, b) => a.rtt - b.rtt);
+  const rows = sorted.map((entry, rank) => {
+    const isWinner = entry.pop === round.gslbWinner;
+    const isConn   = entry.pop === round.connected;
+    return `<tr>
+      <td style="font-size:11px;color:var(--muted)">#${rank+1}</td>
+      <td style="font-family:monospace;font-weight:${isWinner?'700':'400'};color:${isWinner?'var(--primary)':'var(--text)'}">${esc(entry.pop)}</td>
+      <td>${rttBar(entry.rtt, maxRtt, 110)}</td>
+      <td>${isWinner ? '<span style="color:var(--primary);font-size:11px">★ elected</span>' : ''}${isConn ? ' <span style="color:var(--success);font-size:11px">✅ connected</span>' : ''}</td>
+    </tr>`;
+  }).join('');
+  _elecDetailRow = document.createElement('tr');
+  _elecDetailRow.innerHTML = `
+    <td colspan="7" style="padding:0;border-top:none">
+      <div style="background:var(--bg2);border-left:3px solid var(--primary);padding:10px 16px;margin:2px 0 4px">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:8px">
+          Round ${idx+1} · ${round.rtts.length} PoPs measured · Egress: ${esc(round.egress||'—')}
+          ${round.tunnel ? ` · <span style="color:var(--success)">✅ ${esc(round.tunnel.gateway)} / ${esc(round.tunnel.assignedIp)}</span>` : ''}
+        </div>
+        <div class="error-table" style="max-height:260px;overflow-y:auto">
+          <table>
+            <thead><tr><th>Rank</th><th>PoP</th><th>RTT</th><th>Result</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      </div>
+    </td>`;
+  tr.insertAdjacentElement('afterend', _elecDetailRow);
+  _elecDetailRow.scrollIntoView({ behavior:'smooth', block:'nearest' });
+}
+
+function closeElecDetail() {
+  if (_elecDetailRow) { _elecDetailRow.remove(); _elecDetailRow = null; }
+  if (_elecDetailSrc) { _elecDetailSrc.style.background = ''; _elecDetailSrc = null; }
+}
+
+function gslbPopRefToggle() {
+  const el  = document.getElementById('gslb-pop-ref');
+  const btn = document.getElementById('gslb-pop-ref-btn');
+  if (!el) return;
+  const shown = el.style.display !== 'none';
+  el.style.display = shown ? 'none' : 'block';
+  if (btn) btn.textContent = shown ? '▸ Show' : '▾ Hide';
+  if (!shown && !el.dataset.built) { el.innerHTML = gslbBuildPopRef(); el.dataset.built = '1'; }
+}
+
+function gslbPopRefFilter(q) {
+  q = q.toLowerCase();
+  const rows = document.querySelectorAll('#gslb-pop-ref tr[data-search]');
+  for (const row of rows) row.style.display = (!q || row.dataset.search.includes(q)) ? '' : 'none';
+}
+
+function gslbBuildPopRef() {
+  const regions = {};
+  for (const d of GSLB_POP_DATA) { if (!regions[d.region]) regions[d.region]=[]; regions[d.region].push(d); }
+  const regionOrder = ['North America','Europe','Asia','Oceania','South America','Middle East','Africa'];
+  const totalPops = GSLB_POP_DATA.reduce((n,d) => n+d.pops.length, 0);
+  let html = `<div style="padding:10px 14px 4px">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+      <input type="text" oninput="gslbPopRefFilter(this.value)" placeholder="Filter by city, country or PoP code…"
+        style="flex:1;background:var(--bg3);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:5px 10px;font-size:12px">
+      <span style="font-size:11px;color:var(--muted);white-space:nowrap">${GSLB_POP_DATA.length} metros · ${totalPops} PoPs</span>
+    </div>
+    <div class="error-table" style="max-height:360px;overflow-y:auto">
+      <table><thead><tr><th>Metro</th><th>City</th><th>Country</th><th>Region</th><th>PoP Codes</th></tr></thead><tbody>`;
+  for (const region of regionOrder) {
+    const entries = (regions[region]||[]).sort((a,b) => a.city.localeCompare(b.city));
+    for (const d of entries) {
+      const s = `${d.code} ${d.city} ${d.country} ${d.region} ${d.pops.join(' ')}`.toLowerCase();
+      html += `<tr data-search="${s}">
+        <td style="font-family:monospace;font-weight:600;color:var(--primary)">${esc(d.code)}</td>
+        <td>${esc(d.city)}</td>
+        <td style="color:var(--muted)">${esc(d.country)}</td>
+        <td><span style="font-size:10px;color:var(--muted)">${esc(d.region)}</span></td>
+        <td style="font-family:monospace;font-size:11px;color:var(--muted)">${esc(d.pops.join(', '))}</td>
+      </tr>`;
+    }
+  }
+  html += `</tbody></table></div></div>`;
+  return html;
+}
+
 function renderGSLB() {
   const el = document.getElementById('gslb-content');
 
@@ -4661,13 +4950,9 @@ function renderGSLB() {
       const bn = parseInt(b.match(/\.(\d+)\.log$/i)?.[1] ?? '0');
       return an - bn;
     });
-
-  // Default selected file: whatever is currently active (or the primary log)
   const activeFile = state.gslbFile
     ?? gslbFiles.find(f => !/\.\d+\.log$/i.test(f))
-    ?? gslbFiles[0]
-    ?? '';
-
+    ?? gslbFiles[0] ?? '';
   const fileBar = gslbFiles.length > 1 ? `
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;
                 background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px 14px">
@@ -4696,54 +4981,134 @@ function renderGSLB() {
     return;
   }
 
-  const { rounds, pops } = state.gslb;
-  // Sort: GSLB server wins first (authoritative), then connected count, then median RTT
+  const { rounds, pops, popChanges = 0, anomalies = 0 } = state.gslb;
   const popList = Object.entries(pops)
     .map(([name, p]) => ({ name, ...p }))
     .sort((a, b) => (b.gslbWins - a.gslbWins) || (b.connected - a.connected) || (a.median - b.median));
-
   const maxMedian = Math.max(...popList.map(p => p.median));
-  // Best PoP = most GSLB server wins (the server's own authoritative ranking)
-  const bestPop  = popList[0];
-  const connPop  = popList.find(p => p.connected > 0) || bestPop;
-  const egress   = rounds.find(r => r.egress)?.egress || '—';
-
-  // RTT trend: compare first vs last round winner median RTT
-  const firstRound = rounds[0]?.measurements?.[0]?.rtt ?? rounds[0]?.rtts?.[0]?.rtt;
-  const firstWinnerRtt = pops[rounds[0]?.gslbWinner]?.measurements.find(m=>m.roundIdx===0)?.rtt;
-  const lastWinnerRtt  = pops[rounds[rounds.length-1]?.gslbWinner]?.measurements.find(m=>m.roundIdx===rounds.length-1)?.rtt;
+  const bestPop = popList[0];
+  const connPop = popList.find(p => p.connected > 0) || bestPop;
+  const egress  = rounds.find(r => r.egress)?.egress || '—';
+  const firstWinnerRtt = pops[rounds[0]?.gslbWinner]?.measurements.find(m => m.roundIdx === 0)?.rtt;
+  const lastWinnerRtt  = pops[rounds[rounds.length-1]?.gslbWinner]?.measurements.find(m => m.roundIdx === rounds.length-1)?.rtt;
   const trend = (firstWinnerRtt && lastWinnerRtt)
-    ? (lastWinnerRtt < firstWinnerRtt ? `↓ ${firstWinnerRtt - lastWinnerRtt}ms improvement` : lastWinnerRtt > firstWinnerRtt ? `↑ ${lastWinnerRtt - firstWinnerRtt}ms degradation` : '→ stable')
-    : '';
+    ? (lastWinnerRtt < firstWinnerRtt ? `↓ ${firstWinnerRtt - lastWinnerRtt}ms improvement`
+       : lastWinnerRtt > firstWinnerRtt ? `↑ ${lastWinnerRtt - firstWinnerRtt}ms degradation`
+       : '→ stable') : '';
+
+  const totalGslbPops = GSLB_POP_DATA.reduce((n, d) => n + d.pops.length, 0);
 
   el.innerHTML = fileBar + `
-    <!-- Summary cards -->
-    <div class="dash-grid" style="margin-bottom:16px">
+    <!-- ── Stat cards ── -->
+    <div class="dash-grid" style="margin-bottom:16px;grid-template-columns:repeat(3,1fr)">
       <div class="stat-card">
-        <div class="stat-label">GSLB Rounds</div>
+        <div class="stat-label">Election Rounds</div>
         <div class="stat-value">${rounds.length}</div>
-        <div class="stat-sub">${rounds.filter(r=>r.tunnel).length} tunnels established</div>
+        <div class="stat-sub">${rounds.filter(r=>r.tunnel).length} new tunnels established</div>
       </div>
       <div class="stat-card">
-        <div class="stat-label">Best PoP (GSLB chosen)</div>
+        <div class="stat-label">GSLB Selected PoP</div>
         <div class="stat-value stat-green" style="font-size:18px">${esc(bestPop.name)}</div>
-        <div class="stat-sub">${bestPop.gslbWins}× GSLB winner · ${bestPop.median}ms median RTT</div>
+        <div class="stat-sub">${bestPop.gslbWins}× elected · ${bestPop.median}ms median RTT</div>
       </div>
       <div class="stat-card">
         <div class="stat-label">Connected PoP</div>
         <div class="stat-value" style="font-size:18px">${esc(connPop.name)}</div>
-        <div class="stat-sub">${connPop.connected}× connected · ${connPop.gslbWins}× GSLB winner</div>
+        <div class="stat-sub">${connPop.connected}× connected · ${trend || '—'}</div>
       </div>
       <div class="stat-card">
         <div class="stat-label">Client Egress IP</div>
-        <div class="stat-value" style="font-size:16px">${esc(egress)}</div>
-        <div class="stat-sub">RTT trend: ${trend || '—'}</div>
+        <div class="stat-value" style="font-size:14px">${esc(egress)}</div>
+        <div class="stat-sub">Public IP seen by GSLB server</div>
+      </div>
+      <div class="stat-card" ${popChanges > 0 ? 'style="border-color:rgba(227,179,65,.4)"' : ''}>
+        <div class="stat-label">PoP Changes</div>
+        <div class="stat-value" style="${popChanges > 0 ? 'color:var(--warning)' : ''}">${popChanges}</div>
+        <div class="stat-sub">elected PoP switched during session</div>
+      </div>
+      <div class="stat-card" ${anomalies > 0 ? 'style="border-color:rgba(248,81,73,.4)"' : ''}>
+        <div class="stat-label">Switch Anomalies</div>
+        <div class="stat-value" style="${anomalies > 0 ? 'color:var(--error)' : ''}">${anomalies}</div>
+        <div class="stat-sub">thresholds met but server returned 304</div>
       </div>
     </div>
 
-    <!-- PoP table -->
     ${buildRttChartSVG(rounds, pops, popList)}
-    <div class="section-title">PoP Performance — sorted by GSLB wins · click any row to expand</div>
+
+    <!-- ── Election Round Analysis ── -->
+    <div class="section-title" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      Election Round Analysis
+      <span style="font-size:11px;color:var(--muted);font-weight:400">GSLB switches only when Δ% ≥25% AND Δms ≥20ms · click any row to expand all PoP RTTs</span>
+    </div>
+    <div class="error-table" style="margin-bottom:20px">
+      <table>
+        <thead><tr>
+          <th>Timestamp</th>
+          <th>Type</th>
+          <th>Elected PoP</th>
+          <th>Best Candidate</th>
+          <th style="text-align:center">Δ% ≥25%</th>
+          <th style="text-align:center">Δms ≥20ms</th>
+          <th>Action</th>
+        </tr></thead>
+        <tbody>
+          ${rounds.map((r, i) => {
+            const e = r._elec;
+            const tsShort = (r.ts || '').slice(0, 19);
+
+            let typeLabel = 'MONITOR', typeColor = '#8b949e';
+            if (r.tunnel)        { typeLabel = 'NEW';     typeColor = '#3fb950'; }
+            else if (e?.suboptimal) { typeLabel = 'ANOMALY'; typeColor = '#f85149'; }
+            else if (e?.switched)   { typeLabel = 'SWITCH';  typeColor = '#58a6ff'; }
+            else if (e?.unchanged)  { typeLabel = 'STAY';    typeColor = '#8b949e'; }
+
+            const electedCell = r.gslbWinner
+              ? `<span style="font-family:monospace;font-weight:600">${esc(r.gslbWinner)}</span>${e?.winnerRtt != null ? ` <span style="font-size:11px;color:${rttColor(e.winnerRtt)}">${e.winnerRtt}ms</span>` : ''}`
+              : '<span style="color:var(--muted)">—</span>';
+
+            const bestCell = !e ? '<span style="color:var(--muted)">—</span>'
+              : e.isBestSel
+                ? '<span style="color:var(--success);font-size:11px">✓ optimal</span>'
+                : e.bestCand
+                  ? `<span style="font-family:monospace">${esc(e.bestCand)}</span>${e.bestCandRtt != null ? ` <span style="font-size:11px;color:${rttColor(e.bestCandRtt)}">${e.bestCandRtt}ms</span>` : ''}`
+                  : '<span style="color:var(--muted)">—</span>';
+
+            const propCell = !e || e.deltaMs === 0
+              ? '<span style="color:var(--muted)">—</span>'
+              : e.propMet
+                ? `<span style="color:var(--success);font-weight:600">✓ ${e.deltaPct.toFixed(0)}%</span>`
+                : `<span style="color:var(--muted);font-size:11px">${e.deltaPct.toFixed(0)}%</span>`;
+            const absCell = !e || e.deltaMs === 0
+              ? '<span style="color:var(--muted)">—</span>'
+              : e.absMet
+                ? `<span style="color:var(--success);font-weight:600">✓ ${e.deltaMs}ms</span>`
+                : `<span style="color:var(--muted);font-size:11px">${e.deltaMs}ms</span>`;
+
+            let actionCell;
+            if (r.tunnel)          actionCell = '<span style="color:var(--success);font-weight:600">⊕ NEW TUNNEL</span>';
+            else if (e?.suboptimal) actionCell = '<span style="color:var(--error);font-weight:600">⚠ ANOMALY</span> <span style="font-size:10px;color:var(--muted)">(304)</span>';
+            else if (e?.switched)   actionCell = '<span style="color:var(--primary);font-weight:600">⇄ SWITCHED</span>';
+            else if (e?.unchanged)  actionCell = '<span style="color:var(--muted)">⟲ STAY</span>';
+            else                    actionCell = '<span style="color:var(--muted);font-size:11px">— monitoring</span>';
+
+            const rowBg = e?.suboptimal ? ';background:rgba(248,81,73,.06)' : r.tunnel ? ';background:rgba(63,185,80,.04)' : '';
+
+            return `<tr onclick="toggleElecDetail(this,${i})" style="cursor:pointer${rowBg}">
+              <td style="color:var(--muted);font-size:11px;white-space:nowrap;font-family:monospace">${tsShort}</td>
+              <td><span style="font-size:10px;font-weight:700;padding:1px 6px;border-radius:10px;background:${typeColor}22;color:${typeColor};border:1px solid ${typeColor}44">${typeLabel}</span></td>
+              <td>${electedCell}</td>
+              <td>${bestCell}</td>
+              <td style="text-align:center">${propCell}</td>
+              <td style="text-align:center">${absCell}</td>
+              <td>${actionCell}</td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>
+
+    <!-- ── PoP Performance ── -->
+    <div class="section-title">PoP Performance — sorted by GSLB elections · click row to expand round history</div>
     <div class="error-table" style="margin-bottom:20px">
       <table>
         <thead><tr>
@@ -4772,40 +5137,17 @@ function renderGSLB() {
       </table>
     </div>
 
-    <!-- Round history -->
-    <div class="section-title" style="display:flex;align-items:center;gap:10px">
-      Round History
-      <span style="font-size:11px;color:var(--muted);font-weight:400">
-        ✅ = new tunnel established &nbsp;·&nbsp; ⟲ = stayed on current PoP (RTT improvement &lt; 20ms or 25%) &nbsp;·&nbsp; — = monitoring only
-      </span>
-    </div>
-    <div class="error-table">
-      <table>
-        <thead><tr><th>Date / Time</th><th>Egress IP</th><th>GSLB Winner</th><th>Winner RTT</th><th>Connected To</th><th>Gateway</th><th>Assigned IP</th></tr></thead>
-        <tbody>
-          ${rounds.map((r, i) => {
-            const winner = r.rtts.length ? r.rtts.reduce((a,b) => a.rtt<=b.rtt?a:b) : null;
-            const dateTime = r.ts.slice(0,19); // YYYY/MM/DD HH:MM:SS
-            let connCell;
-            if (r.tunnel) {
-              connCell = `<span style="color:var(--success);font-weight:600">✅ ${esc(r.connected)}</span>`;
-            } else if (r.connected) {
-              connCell = `<span style="color:var(--muted)">⟲ ${esc(r.connected)}</span>`;
-            } else {
-              connCell = '<span style="color:var(--muted)">—</span>';
-            }
-            return `<tr>
-              <td style="color:var(--muted);font-size:11px;white-space:nowrap;font-family:monospace">${dateTime}</td>
-              <td style="color:var(--muted);font-size:11px;font-family:monospace">${esc(r.egress||'—')}</td>
-              <td style="font-family:monospace;font-weight:500">${r.gslbWinner ? esc(r.gslbWinner) : (winner ? esc(winner.pop) : '—')}</td>
-              <td>${winner ? `<span style="color:${rttColor(winner.rtt)}">${winner.rtt}ms</span>` : '—'}</td>
-              <td>${connCell}</td>
-              <td style="color:var(--muted);font-size:11px;font-family:monospace">${r.tunnel ? esc(r.tunnel.gateway) : '—'}</td>
-              <td style="color:var(--muted);font-size:11px;font-family:monospace">${r.tunnel ? esc(r.tunnel.assignedIp) : '—'}</td>
-            </tr>`;
-          }).join('')}
-        </tbody>
-      </table>
+    <!-- ── Collapsible PoP Reference ── -->
+    <div style="border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:16px">
+      <div onclick="gslbPopRefToggle()"
+           style="display:flex;align-items:center;justify-content:space-between;padding:10px 16px;cursor:pointer;background:var(--bg2);user-select:none">
+        <div style="display:flex;align-items:center;gap:10px">
+          <span style="font-weight:600;font-size:13px">PoP Reference</span>
+          <span style="font-size:11px;color:var(--muted)">${GSLB_POP_DATA.length} metros · ${totalGslbPops} PoPs worldwide</span>
+        </div>
+        <span id="gslb-pop-ref-btn" style="font-size:12px;color:var(--muted)">▸ Show</span>
+      </div>
+      <div id="gslb-pop-ref" style="display:none"></div>
     </div>
   `;
 }
