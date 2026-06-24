@@ -767,6 +767,34 @@ body {
         <button class="filter-btn active-debug"   data-level="debug"   onclick="toggleLevel(this)">DEBUG</button>
       </div>
       <button id="log-sort-btn" class="filter-btn" onclick="toggleLogSort()" title="Toggle sort order" style="font-size:11px;padding:3px 10px">↓ Newest</button>
+      <select id="log-tz-select" class="file-select" title="Display timezone" onchange="onTzChange(this.value)" style="font-size:11px;max-width:160px">
+        <option value="">🕐 Original TZ</option>
+        <option value="UTC">UTC</option>
+        <option value="local">🌐 Local (browser)</option>
+        <optgroup label="Americas">
+          <option value="America/New_York">US Eastern (ET)</option>
+          <option value="America/Chicago">US Central (CT)</option>
+          <option value="America/Denver">US Mountain (MT)</option>
+          <option value="America/Los_Angeles">US Pacific (PT)</option>
+          <option value="America/Anchorage">US Alaska (AKT)</option>
+          <option value="Pacific/Honolulu">US Hawaii (HST)</option>
+          <option value="America/Sao_Paulo">Brazil (BRT)</option>
+        </optgroup>
+        <optgroup label="Europe">
+          <option value="Europe/London">London (GMT/BST)</option>
+          <option value="Europe/Paris">Central Europe (CET)</option>
+          <option value="Europe/Helsinki">Eastern Europe (EET)</option>
+        </optgroup>
+        <optgroup label="Asia / Pacific">
+          <option value="Asia/Dubai">Gulf (GST)</option>
+          <option value="Asia/Kolkata">India (IST)</option>
+          <option value="Asia/Bangkok">Indochina (ICT)</option>
+          <option value="Asia/Singapore">Singapore (SGT)</option>
+          <option value="Asia/Tokyo">Japan (JST)</option>
+          <option value="Asia/Seoul">Korea (KST)</option>
+          <option value="Australia/Sydney">Sydney (AEDT)</option>
+        </optgroup>
+      </select>
       <span class="log-count" id="log-count-label">0 lines</span>
     </div>
     <!-- Single-file virtual scroll (default) -->
@@ -886,6 +914,7 @@ const state = {
   dismissedIssues:  new Set(), // IDs of findings marked reviewed this session
   activeLevels: new Set(['error','warning','warn','info','debug','trace']),
   searchQuery: '',
+  displayTz: '',        // '' = original, else IANA timezone string
   logRegexMode: false,
   logInvertMode: false,
   logCompiledRe: null,
@@ -3761,6 +3790,38 @@ function normalizeTs(ts) {
   return s.replace(/\s[-+]\d{2}:\d{2}(\.\d+)?$/, '').trim();
 }
 
+function formatTsInTz(ts, tz) {
+  if (!ts || !tz) return ts || '';
+  const resolvedTz = tz === 'local' ? Intl.DateTimeFormat().resolvedOptions().timeZone : tz;
+  // Normalize to ISO: YYYY/MM/DD → YYYY-MM-DD, space before date → T
+  let s = ts.replace(/^\[[^\]]*:/, '').trim();
+  s = s.replace(/^(\d{4})\/(\d{2})\/(\d{2})/, '$1-$2-$3');
+  s = s.replace(/^(\d{4}-\d{2}-\d{2}) /, '$1T');
+  // Remove space between fractional seconds and tz offset (NPA format: .088 -05:00 → .088-05:00)
+  s = s.replace(/(\.\d+) ([+-]\d{2}:\d{2})$/, '$1$2');
+  // Append Z if no tz offset — nsdebuglog has no suffix; Netskope client logs in UTC
+  if (!/[Z]$/.test(s) && !/[+-]\d{2}:?\d{2}$/.test(s)) s += 'Z';
+  const d = new Date(s);
+  if (isNaN(d.getTime())) return ts;
+  try {
+    const p = new Intl.DateTimeFormat('en-CA', {
+      timeZone: resolvedTz,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+      hour12: false,
+    }).formatToParts(d);
+    const g = t => p.find(x => x.type === t)?.value || '00';
+    const ms = String(d.getUTCMilliseconds()).padStart(3, '0');
+    return `${g('year')}/${g('month')}/${g('day')} ${g('hour')}:${g('minute')}:${g('second')}.${ms}`;
+  } catch { return ts; }
+}
+
+function onTzChange(tz) {
+  state.displayTz = tz;
+  if (state.globalSearchMode) runGlobalSearch();
+  else applyFilters();
+}
+
 function buildGlobalLogIndex() {
   if (state.globalLogIndex) return state.globalLogIndex;
   const all = [];
@@ -3846,7 +3907,7 @@ function _execGlobalSearch() {
         lastFile = r.file;
       }
       return `<div class="log-row ${rowClass}" style="align-items:flex-start">
-        <span class="col-ts" style="flex-shrink:0">${esc(r.ts || '')}</span>
+        <span class="col-ts" style="flex-shrink:0">${esc(formatTsInTz(r.ts, state.displayTz) || '')}</span>
         <span class="col-lvl lvl-${lvl}" style="flex-shrink:0">${lvl.toUpperCase().slice(0,5)}</span>
         ${fileChip}<span class="col-msg">${esc(r.msg || r.raw || '')}</span>
       </div>`;
@@ -3895,7 +3956,7 @@ function _execGlobalSearch() {
         lastFile = r.file;
       }
       return `<div class="log-row ${rowClass}" style="align-items:flex-start">
-        <span class="col-ts" style="flex-shrink:0">${esc(r.ts || '')}</span>
+        <span class="col-ts" style="flex-shrink:0">${esc(formatTsInTz(r.ts, state.displayTz) || '')}</span>
         <span class="col-lvl lvl-${lvl}" style="flex-shrink:0">${lvl.toUpperCase().slice(0,5)}</span>
         ${fileChip}<span class="col-msg">${esc(r.msg || r.raw || '')}</span>
       </div>`;
@@ -3968,7 +4029,7 @@ function _execGlobalSearch() {
 
       return `<div class="log-row ${rowClass}${isMatch ? ' gs-match' : ''}" style="${isMatch ? 'background:rgba(227,179,65,0.07);border-left:2px solid var(--warning);padding-left:6px;' : 'padding-left:8px;'}">
         ${isMatch ? '<span style="color:var(--warning);font-size:10px;margin-right:4px;flex-shrink:0">▶</span>' : '<span style="width:14px;flex-shrink:0;display:inline-block"></span>'}
-        <span class="col-ts" style="flex-shrink:0">${esc(r.ts || '')}</span>
+        <span class="col-ts" style="flex-shrink:0">${esc(formatTsInTz(r.ts, state.displayTz) || '')}</span>
         <span class="col-lvl lvl-${lvl}" style="flex-shrink:0">${lvl.toUpperCase().slice(0,5)}</span>
         ${fileLabel}
         <span class="col-msg">${msg}</span>
@@ -4049,7 +4110,7 @@ function paintRows() {
     }
 
     html.push(`<div class="log-row ${rowClass}">
-      <span class="col-ts">${esc(r.ts)}</span>
+      <span class="col-ts">${esc(formatTsInTz(r.ts, state.displayTz))}</span>
       <span class="col-lvl ${lvlClass}">${r.level.toUpperCase().slice(0,5)}</span>
       <span class="col-src">${esc(r.source)}</span>
       <span class="col-comp">${esc(r.component)}</span>
