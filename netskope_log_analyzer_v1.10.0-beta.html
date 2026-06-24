@@ -5827,7 +5827,25 @@ function buildRttChartSVG(rounds, pops, popList) {
 
   return `<div style="background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:12px 16px;margin-bottom:20px">
     <div style="font-size:11px;color:#8b949e;font-weight:600;margin-bottom:8px;display:flex;align-items:center;flex-wrap:wrap;gap:6px">
-      RTT OVER TIME &nbsp;·&nbsp; <span style="font-weight:400">— = GSLB elected PoP &nbsp; ● = connected &nbsp; ● = PoP switch &nbsp; ✕ = timeout</span>
+      RTT OVER TIME
+      <span style="font-weight:400;display:inline-flex;align-items:center;gap:10px;margin-left:6px">
+        <span style="display:inline-flex;align-items:center;gap:4px">
+          <svg width="20" height="8" style="vertical-align:middle;flex-shrink:0"><line x1="0" y1="4" x2="20" y2="4" stroke="rgba(255,255,255,0.75)" stroke-width="2"/><circle cx="10" cy="4" r="3.5" fill="rgba(255,255,255,0.85)" stroke="rgba(0,0,0,0.3)" stroke-width="1"/></svg>
+          GSLB winner
+        </span>
+        <span style="display:inline-flex;align-items:center;gap:4px">
+          <svg width="12" height="12" style="vertical-align:middle;flex-shrink:0"><circle cx="6" cy="6" r="5.5" fill="#f0883e" stroke="rgba(0,0,0,0.3)" stroke-width="1"/></svg>
+          PoP switch
+        </span>
+        <span style="display:inline-flex;align-items:center;gap:4px">
+          <svg width="12" height="12" style="vertical-align:middle;flex-shrink:0"><circle cx="6" cy="6" r="5" fill="#58a6ff" stroke="#fff" stroke-width="1.5"/></svg>
+          connected
+        </span>
+        <span style="display:inline-flex;align-items:center;gap:4px">
+          <svg width="12" height="12" style="vertical-align:middle;flex-shrink:0"><line x1="2" y1="2" x2="10" y2="10" stroke="#8b949e" stroke-width="1.5"/><line x1="10" y1="2" x2="2" y2="10" stroke="#8b949e" stroke-width="1.5"/></svg>
+          timeout
+        </span>
+      </span>
       ${toNote}
     </div>
     ${s}
