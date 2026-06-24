@@ -3055,33 +3055,37 @@ const VPN_SIGNATURES = [
 ];
 
 function parseAppInfoLog(text) {
-  const lines = text.split('\n');
-  if (!lines.length || !lines[0].trim()) return { apps: [], vpnClients: [] };
+  const lines = text.replace(/\r/g, '').split('\n').filter(l => l.trim());
+  if (!lines.length) return { apps: [], vpnClients: [] };
 
   const header = lines[0];
   const isMac = /^Name\s/.test(header);
-  const isWin = /^DisplayName\s/.test(header);
+  const isWin = /^DisplayName\s/i.test(header);
   if (!isMac && !isWin) return { apps: [], vpnClients: [] };
 
-  // Column boundaries (fixed-width, 64 chars each)
-  const C0 = 0, C1 = 64, C2 = 128, C3 = 192;
-
+  // Derive column offsets from the actual header line (like GTF does)
   const apps = [];
-  for (let i = 1; i < lines.length; i++) {
-    const line = lines[i];
-    if (!line.trim()) continue;
-    const name      = line.slice(C0, C1).trim();
-    const verOrDesc = line.slice(C1, C2).trim();
-    const pubOrVer  = line.slice(C2, C3).trim();
-    const extra     = line.slice(C3).trim();
-    if (!name) continue;
-
-    if (isMac) {
-      // cols: Name | Description | Version
-      apps.push({ name, desc: verOrDesc, version: pubOrVer || extra });
-    } else {
-      // cols: DisplayName | DisplayVersion | Publisher | InstallDate
-      apps.push({ name, version: verOrDesc, publisher: pubOrVer, installDate: extra });
+  if (isWin) {
+    const cols = ['DisplayName', 'DisplayVersion', 'Publisher', 'InstallDate'];
+    const off = cols.map(c => header.indexOf(c));
+    for (let i = 1; i < lines.length; i++) {
+      const l = lines[i];
+      const name        = l.slice(off[0], off[1] > 0 ? off[1] : undefined).trim();
+      const version     = off[1] >= 0 ? l.slice(off[1], off[2] > 0 ? off[2] : undefined).trim() : '';
+      const publisher   = off[2] >= 0 ? l.slice(off[2], off[3] > 0 ? off[3] : undefined).trim() : '';
+      const installDate = off[3] >= 0 ? l.slice(off[3]).trim() : '';
+      if (name) apps.push({ name, version, publisher, installDate });
+    }
+  } else {
+    // Mac: Name | Description | Version
+    const cols = ['Name', 'Description', 'Version'];
+    const off = cols.map(c => header.indexOf(c));
+    for (let i = 1; i < lines.length; i++) {
+      const l = lines[i].replace(/\x00/g, '').trimEnd();
+      const name    = l.slice(off[0], off[1] > 0 ? off[1] : undefined).trim().replace(/\.app$/, '');
+      const desc    = off[1] >= 0 ? l.slice(off[1], off[2] > 0 ? off[2] : undefined).trim() : '';
+      const version = off[2] >= 0 ? l.slice(off[2]).trim().replace(/\x00/g, '') : '';
+      if (name) apps.push({ name, desc, version, publisher: '', installDate: '' });
     }
   }
 
@@ -3103,7 +3107,7 @@ function parseAppInfoLog(text) {
 function buildAppInfoCard() {
   if (!state.appInfo) return '';
   const { apps, vpnClients } = state.appInfo;
-  if (!apps.length) return '';
+  if (!apps.length && !vpnClients.length) return '';
 
   const hasWin = !!apps[0]?.publisher;   // Windows has publisher column
 
