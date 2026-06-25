@@ -336,6 +336,37 @@ body {
 .log-count { color: var(--muted); font-size: 11px; white-space: nowrap; }
 
 /* Virtual log list */
+.log-histo-wrap {
+  flex-shrink: 0;
+  height: 72px;
+  position: relative;
+  background: var(--bg1);
+  border-bottom: 1px solid var(--border);
+  display: none;
+  user-select: none;
+}
+.log-histo-wrap svg { display: block; width: 100%; cursor: crosshair; }
+.log-histo-label {
+  position: absolute;
+  bottom: 3px;
+  left: 8px;
+  font-size: 9px;
+  color: var(--muted);
+  pointer-events: none;
+}
+.log-histo-clear {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  font-size: 10px;
+  padding: 1px 7px;
+  background: rgba(248,81,73,.12);
+  color: #f85149;
+  border: 1px solid rgba(248,81,73,.3);
+  border-radius: 3px;
+  cursor: pointer;
+  display: none;
+}
 .log-container {
   flex: 1;
   overflow: hidden;
@@ -797,6 +828,14 @@ body {
       </select>
       <span class="log-count" id="log-count-label">0 lines</span>
     </div>
+    <!-- Log density histogram -->
+    <div class="log-histo-wrap" id="log-histo-wrap">
+      <svg id="log-histo-svg" height="60"
+           onmousedown="histoMouseDown(event)" onmousemove="histoMouseMove(event)"
+           onmouseup="histoMouseUp(event)" onmouseleave="histoMouseLeave(event)"></svg>
+      <div class="log-histo-label" id="log-histo-label"></div>
+      <button class="log-histo-clear" id="log-histo-clear" onclick="histoClear()">✕ Clear filter</button>
+    </div>
     <!-- Single-file virtual scroll (default) -->
     <div class="log-container" id="log-single-pane">
       <div class="log-viewport" id="log-viewport">
@@ -915,6 +954,7 @@ const state = {
   activeLevels: new Set(['error','warning','warn','info','debug','trace']),
   searchQuery: '',
   displayTz: '',        // '' = original, else IANA timezone string
+  logHistoFilter: { minMs: 0, maxMs: 0 }, // active time-range brush filter
   logRegexMode: false,
   logInvertMode: false,
   logCompiledRe: null,
@@ -3644,7 +3684,7 @@ function populateFileSelect() {
     opt.textContent = `${f} (${state.parsedLogs[f].length.toLocaleString()} lines)`;
     sel.appendChild(opt);
   });
-  sel.onchange = () => { state.currentFile = sel.value; applyFilters(); updateFlowFilters(); };
+  sel.onchange = () => { state.currentFile = sel.value; state.logHistoFilter = { minMs: 0, maxMs: 0 }; applyFilters(); updateFlowFilters(); };
   if (files.length > 0) {
     // Default to nsdebuglog.log if present, else first
     const pref = files.find(f => f === 'nsdebuglog.log') || files[0];
@@ -3757,8 +3797,10 @@ function applyFilters() {
   const q  = state.searchQuery;
   const re = state.logRegexMode ? state.logCompiledRe : null;
   const hasQuery = re ? true : !!q;
+  const hf = state.logHistoFilter;
   state.filteredRows = rows.filter(r => {
     if (!state.activeLevels.has(r.level)) return false;
+    if (hf.minMs) { const t = _tsToMs(r.ts); if (!t || t < hf.minMs || t > hf.maxMs) return false; }
     let match = true;
     if (re)      match = re.test(r.raw);
     else if (q)  match = r.raw.toLowerCase().includes(q);
@@ -3767,6 +3809,7 @@ function applyFilters() {
   if (state.logSortDesc) state.filteredRows.reverse();
   document.getElementById('log-count-label').textContent =
     `${state.filteredRows.length.toLocaleString()} / ${rows.length.toLocaleString()} lines`;
+  buildLogHistogram(rows);
   renderVirtualLog();
 }
 
@@ -3883,9 +3926,14 @@ function _execGlobalSearch() {
   const lbl = document.getElementById('log-count-label');
   if (!el) return;
 
+  // Always build histogram from the full unfiltered global index
+  buildLogHistogram(buildGlobalLogIndex());
+
   if (!q) {
     // No query — render all logs merged in time order (capped for performance)
-    const index = buildGlobalLogIndex();
+    let index = buildGlobalLogIndex();
+    const hf = state.logHistoFilter;
+    if (hf.minMs) index = index.filter(r => { const t = _tsToMs(r.ts); return t && t >= hf.minMs && t <= hf.maxMs; });
     const MAX_DISPLAY = 5000;
     const rows  = state.logSortDesc ? index.slice(-MAX_DISPLAY).reverse() : index.slice(0, MAX_DISPLAY);
     const total = index.length;
@@ -4052,6 +4100,163 @@ function _execGlobalSearch() {
   }).join('') + (matchIdxs.length >= MAX_MATCHES
     ? `<div style="text-align:center;padding:12px;color:var(--muted);font-size:11px">Showing first ${MAX_MATCHES} matches. Refine your search to narrow results.</div>`
     : '');
+}
+
+// ─── Log Histogram ────────────────────────────────────────────────────────────
+const _HISTO_N = 80;   // number of buckets
+const _HISTO_W = 800;  // SVG viewBox width
+const _HISTO_BH = 50;  // bar area height in SVG units
+const _HISTO_LH = 12;  // x-label area height
+
+const _histo = { minMs: 0, maxMs: 0, dragging: false, dragF0: 0, dragF1: 0 };
+
+function _tsToMs(ts) {
+  if (!ts) return 0;
+  let s = ts.replace(/^\[[^\]]*:/, '').trim();
+  s = s.replace(/^(\d{4})\/(\d{2})\/(\d{2})/, '$1-$2-$3');
+  s = s.replace(/^(\d{4}-\d{2}-\d{2}) /, '$1T');
+  s = s.replace(/(\.\d+) ([+-]\d{2}:\d{2})$/, '$1$2');
+  if (!/Z$/.test(s) && !/[+-]\d{2}:?\d{2}$/.test(s)) s += 'Z';
+  return new Date(s).getTime() || 0;
+}
+
+function buildLogHistogram(allRows) {
+  const wrap  = document.getElementById('log-histo-wrap');
+  const svg   = document.getElementById('log-histo-svg');
+  const label = document.getElementById('log-histo-label');
+  const clear = document.getElementById('log-histo-clear');
+  if (!wrap || !svg) return;
+
+  const pts = allRows.map(r => ({ ms: _tsToMs(r.ts), lv: r.level })).filter(p => p.ms > 0);
+  if (pts.length < 2) { wrap.style.display = 'none'; return; }
+  wrap.style.display = '';
+
+  let minMs = Infinity, maxMs = -Infinity;
+  for (const p of pts) { if (p.ms < minMs) minMs = p.ms; if (p.ms > maxMs) maxMs = p.ms; }
+  _histo.minMs = minMs; _histo.maxMs = maxMs;
+  const span = maxMs - minMs || 1;
+
+  // Buckets: stacked counts per level
+  const B = Array.from({ length: _HISTO_N }, () => ({ e: 0, w: 0, i: 0, d: 0 }));
+  for (const p of pts) {
+    const bi = Math.min(_HISTO_N - 1, Math.floor((p.ms - minMs) / span * _HISTO_N));
+    const b = B[bi];
+    if (p.lv === 'error')                                     b.e++;
+    else if (p.lv === 'warn' || p.lv === 'warning')          b.w++;
+    else if (p.lv === 'debug' || p.lv === 'trace' || p.lv === 'verbose') b.d++;
+    else                                                      b.i++;
+  }
+
+  const maxCnt = Math.max(1, ...B.map(b => b.e + b.w + b.i + b.d));
+  const bw = _HISTO_W / _HISTO_N;
+  const gap = bw > 3 ? 0.8 : 0;
+  const bh = n => Math.max(n > 0 ? 1.5 : 0, _HISTO_BH * n / maxCnt);
+
+  let bars = '';
+  for (let i = 0; i < _HISTO_N; i++) {
+    const b = B[i]; const x = (i * bw).toFixed(2); const w = (bw - gap).toFixed(2);
+    let y = _HISTO_BH;
+    const r = (cnt, fill) => {
+      if (!cnt) return;
+      const h = bh(cnt); y -= h;
+      bars += `<rect x="${x}" y="${y.toFixed(2)}" width="${w}" height="${h.toFixed(2)}" fill="${fill}"/>`;
+    };
+    r(b.d, '#3d444d'); r(b.i, '#1f6feb'); r(b.w, '#d29922'); r(b.e, '#f85149');
+  }
+
+  // X-axis time labels
+  const fmtLbl = ms => new Date(ms).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
+  let xlabels = '';
+  for (let i = 0; i <= 5; i++) {
+    const frac = i / 5;
+    const x = (frac * _HISTO_W).toFixed(1);
+    const anchor = i === 0 ? 'start' : i === 5 ? 'end' : 'middle';
+    xlabels += `<text x="${x}" y="${_HISTO_BH + 9}" fill="#6e7681" font-size="7.5" text-anchor="${anchor}" font-family="monospace">${fmtLbl(minMs + frac * span)}</text>`;
+  }
+
+  // Active filter + drag selection overlay
+  const f = state.logHistoFilter;
+  let sel = '';
+  const selF0 = f.minMs ? Math.max(0, (f.minMs - minMs) / span) : null;
+  const selF1 = f.maxMs ? Math.min(1, (f.maxMs - minMs) / span) : null;
+  if (selF0 !== null && selF1 !== null) {
+    const sx = (selF0 * _HISTO_W).toFixed(1), sw = ((selF1 - selF0) * _HISTO_W).toFixed(1);
+    sel = `<rect x="${sx}" y="0" width="${sw}" height="${_HISTO_BH}" fill="rgba(88,166,255,.13)" stroke="rgba(88,166,255,.5)" stroke-width="1"/>`;
+  }
+  // Live drag rect
+  if (_histo.dragging) {
+    const f0 = Math.min(_histo.dragF0, _histo.dragF1);
+    const f1 = Math.max(_histo.dragF0, _histo.dragF1);
+    const dx = (f0 * _HISTO_W).toFixed(1), dw = ((f1 - f0) * _HISTO_W).toFixed(1);
+    sel += `<rect x="${dx}" y="0" width="${dw}" height="${_HISTO_BH}" fill="rgba(88,166,255,.18)" stroke="#58a6ff" stroke-width="1"/>`;
+  }
+
+  const VH = _HISTO_BH + _HISTO_LH;
+  svg.setAttribute('viewBox', `0 0 ${_HISTO_W} ${VH}`);
+  svg.setAttribute('preserveAspectRatio', 'none');
+  svg.innerHTML = `<g>${bars}</g>${xlabels}${sel}`;
+
+  // Legend pills (top-left corner)
+  const bucketMs = span / _HISTO_N;
+  const bLabel = bucketMs < 60e3 ? `${Math.round(bucketMs/1e3)}s/bar`
+    : bucketMs < 3600e3 ? `${Math.round(bucketMs/60e3)}m/bar`
+    : `${Math.round(bucketMs/3600e3)}h/bar`;
+  label.textContent = `${pts.length.toLocaleString()} rows · ${bLabel}`;
+  if (clear) clear.style.display = f.minMs ? '' : 'none';
+}
+
+function _histoFrac(e) {
+  const r = document.getElementById('log-histo-svg').getBoundingClientRect();
+  return Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+}
+function histoMouseDown(e) {
+  _histo.dragging = true; _histo.dragF0 = _histoFrac(e); _histo.dragF1 = _histo.dragF0;
+}
+function histoMouseMove(e) {
+  if (!_histo.dragging) return;
+  _histo.dragF1 = _histoFrac(e);
+  // Re-render selection overlay only (rebuild full histogram is fine — it's fast)
+  const rows = state.globalSearchMode
+    ? buildGlobalLogIndex()
+    : (state.parsedLogs[state.currentFile] || []);
+  buildLogHistogram(rows);
+}
+function histoMouseUp(e) {
+  if (!_histo.dragging) return;
+  _histo.dragging = false;
+  _histo.dragF1 = _histoFrac(e);
+  const f0 = Math.min(_histo.dragF0, _histo.dragF1);
+  const f1 = Math.max(_histo.dragF0, _histo.dragF1);
+  if (f1 - f0 < 0.008) {
+    // Click — scroll to time
+    const targetMs = _histo.minMs + f0 * (_histo.maxMs - _histo.minMs);
+    _histoScrollTo(targetMs);
+  } else {
+    // Drag — apply time filter
+    state.logHistoFilter.minMs = _histo.minMs + f0 * (_histo.maxMs - _histo.minMs);
+    state.logHistoFilter.maxMs = _histo.minMs + f1 * (_histo.maxMs - _histo.minMs);
+    if (state.globalSearchMode) runGlobalSearch(); else applyFilters();
+  }
+}
+function histoMouseLeave(e) {
+  if (!_histo.dragging) return;
+  _histo.dragging = false; _histo.dragF1 = _histoFrac(e);
+  // Treat leaving as completing the drag
+  histoMouseUp(e);
+}
+function histoClear() {
+  state.logHistoFilter.minMs = 0; state.logHistoFilter.maxMs = 0;
+  if (state.globalSearchMode) runGlobalSearch(); else applyFilters();
+}
+function _histoScrollTo(targetMs) {
+  const rows = state.filteredRows; if (!rows.length) return;
+  let idx = 0, best = Infinity;
+  for (let i = 0; i < rows.length; i++) {
+    const d = Math.abs(_tsToMs(rows[i].ts) - targetMs);
+    if (d < best) { best = d; idx = i; }
+  }
+  const vp = document.getElementById('log-viewport');
+  if (vp) vp.scrollTop = Math.max(0, idx - 3) * ROW_H;
 }
 
 // ─── Virtual Scroller ─────────────────────────────────────────────────────────
