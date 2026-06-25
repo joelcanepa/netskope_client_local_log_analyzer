@@ -1479,6 +1479,11 @@ function renderAll() {
   renderFlowPath();
   renderNPA();
   populateFileSelect();
+  // Sync All Files UI state (defaulted to true in reset)
+  const _sel = document.getElementById('log-file-select');
+  const _srt = document.getElementById('log-sort-btn');
+  if (_sel) { _sel.style.opacity = '0.35'; _sel.style.pointerEvents = 'none'; }
+  if (_srt) { _srt.style.opacity = '0.35'; _srt.style.pointerEvents = 'none'; }
   setActiveTab('findings');
 }
 
@@ -4158,7 +4163,7 @@ function buildLogHistogram(allRows) {
   const bRect = bcanv.getBoundingClientRect();
   const W = Math.round(bRect.width);
   const H = Math.round(bRect.height);
-  if (!W || !H) return;
+  if (!W || !H) { requestAnimationFrame(() => buildLogHistogram(allRows)); return; }
 
   bcanv.width  = W * dpr;
   bcanv.height = H * dpr;
@@ -4756,7 +4761,11 @@ function tlJump(g) {
 function setActiveTab(tab) {
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + tab));
-  if (tab === 'logs')     setTimeout(paintRows, 50);
+  if (tab === 'logs') setTimeout(() => {
+    paintRows();
+    const rows = state.globalSearchMode ? buildGlobalLogIndex() : (state.parsedLogs[state.currentFile] || []);
+    if (rows.length) buildLogHistogram(rows);
+  }, 50);
   if (tab === 'timeline') setTimeout(renderTimeline, 0);
 }
 
@@ -4814,13 +4823,13 @@ function clearData() {
   state.npaSortDesc      = true;
   state.dismissedIssues  = new Set();
   state.globalLogIndex   = null;
-  state.globalSearchMode = false;
+  state.globalSearchMode = true;
   const gBtn = document.getElementById('log-allfiles-btn');
-  if (gBtn) gBtn.classList.remove('active');
+  if (gBtn) gBtn.classList.add('active');
   const sp = document.getElementById('log-single-pane');
   const gp = document.getElementById('log-global-pane');
-  if (sp) sp.style.display = '';
-  if (gp) gp.style.display = 'none';
+  if (sp) sp.style.display = 'none';
+  if (gp) gp.style.display = 'flex';
   // Reset sort buttons to default label
   const lsb = document.getElementById('log-sort-btn');
   if (lsb) lsb.textContent = '↓ Newest';
