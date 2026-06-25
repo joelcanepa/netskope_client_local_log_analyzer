@@ -4129,7 +4129,7 @@ function buildLogHistogram(allRows) {
 
   const pts = allRows.map(r => ({ ms: _tsToMs(r.ts), lv: r.level })).filter(p => p.ms > 0);
   if (pts.length < 2) { wrap.style.display = 'none'; return; }
-  wrap.style.display = '';
+  wrap.style.display = 'block';
 
   let minMs = Infinity, maxMs = -Infinity;
   for (const p of pts) { if (p.ms < minMs) minMs = p.ms; if (p.ms > maxMs) maxMs = p.ms; }
