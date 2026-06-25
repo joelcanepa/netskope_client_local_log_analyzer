@@ -830,12 +830,13 @@ body {
     </div>
     <!-- Log density histogram -->
     <div class="log-histo-wrap" id="log-histo-wrap">
-      <canvas id="log-histo-bars" style="height:52px;cursor:crosshair"
+      <canvas id="log-histo-bars" style="height:36px;cursor:crosshair"
               onmousedown="histoMouseDown(event)" onmousemove="histoMouseMove(event)"
               onmouseup="histoMouseUp(event)" onmouseleave="histoMouseLeave(event)"></canvas>
-      <canvas id="log-histo-xaxis" style="height:18px"></canvas>
+      <canvas id="log-histo-xaxis" style="height:14px"></canvas>
       <div class="log-histo-label" id="log-histo-label"></div>
       <button class="log-histo-clear" id="log-histo-clear" onclick="histoClear()">✕ Clear filter</button>
+      <div id="log-histo-tip" style="display:none;position:fixed;background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:7px 11px;font-size:11px;color:var(--text);pointer-events:none;z-index:9999;min-width:140px;line-height:1.5"></div>
     </div>
     <!-- Single-file virtual scroll (default) -->
     <div class="log-container" id="log-single-pane">
@@ -4156,6 +4157,7 @@ function buildLogHistogram(allRows) {
     else if (p.lv === 'debug' || p.lv === 'trace' || p.lv === 'verbose') b.d++;
     else                                                               b.i++;
   }
+  _histo.B = B; _histo.bucketMs = span / _HISTO_N;
 
   // ── Bars canvas (DPR-crisp) ──────────────────────────────────────
   const dpr = window.devicePixelRatio || 1;
@@ -4280,13 +4282,13 @@ function histoMouseDown(e) {
   _histo.dragging = true; _histo.dragF0 = _histoFrac(e); _histo.dragF1 = _histo.dragF0;
 }
 function histoMouseMove(e) {
-  if (!_histo.dragging) return;
-  _histo.dragF1 = _histoFrac(e);
-  // Re-render selection overlay only (rebuild full histogram is fine — it's fast)
-  const rows = state.globalSearchMode
-    ? buildGlobalLogIndex()
-    : (state.parsedLogs[state.currentFile] || []);
-  buildLogHistogram(rows);
+  if (_histo.dragging) {
+    _histo.dragF1 = _histoFrac(e);
+    const rows = state.globalSearchMode ? buildGlobalLogIndex() : (state.parsedLogs[state.currentFile] || []);
+    buildLogHistogram(rows);
+  } else {
+    histoShowTip(e);
+  }
 }
 function histoMouseUp(e) {
   if (!_histo.dragging) return;
@@ -4306,11 +4308,38 @@ function histoMouseUp(e) {
   }
 }
 function histoMouseLeave(e) {
+  histoHideTip();
   if (!_histo.dragging) return;
   _histo.dragging = false;
-  // Cancel drag — do not apply filter, just redraw to clear the overlay rect
   const rows = state.globalSearchMode ? buildGlobalLogIndex() : (state.parsedLogs[state.currentFile] || []);
   buildLogHistogram(rows);
+}
+function histoShowTip(e) {
+  const tip = document.getElementById('log-histo-tip');
+  if (!tip || !_histo.B) return;
+  const bi = Math.min(_HISTO_N - 1, Math.floor(_histoFrac(e) * _HISTO_N));
+  const b = _histo.B[bi];
+  const bMs  = _histo.minMs + bi * _histo.bucketMs;
+  const bEnd = Math.min(_histo.maxMs, bMs + _histo.bucketMs);
+  const p = n => String(n).padStart(2, '0');
+  const fmt = ms => { const d = new Date(ms); return `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`; };
+  const total = b.e + b.w + b.i + b.d;
+  const rows = [
+    b.e ? `<div><span style="color:#f85149">▪</span> Error <strong style="float:right;padding-left:12px">${b.e.toLocaleString()}</strong></div>` : '',
+    b.w ? `<div><span style="color:#d29922">▪</span> Warn <strong style="float:right;padding-left:12px">${b.w.toLocaleString()}</strong></div>` : '',
+    b.i ? `<div><span style="color:#1f6feb">▪</span> Info <strong style="float:right;padding-left:12px">${b.i.toLocaleString()}</strong></div>` : '',
+    b.d ? `<div><span style="color:#3d444d">▪</span> Debug <strong style="float:right;padding-left:12px">${b.d.toLocaleString()}</strong></div>` : '',
+  ].join('');
+  tip.innerHTML = `<div style="font-size:10px;color:var(--muted);margin-bottom:4px;padding-bottom:3px;border-bottom:1px solid var(--border)">${fmt(bMs)} – ${fmt(bEnd)}</div>
+    ${rows || '<span style="opacity:.4">No data</span>'}
+    ${total ? `<div style="margin-top:3px;padding-top:3px;border-top:1px solid var(--border);font-size:10px;opacity:.6">Total: ${total.toLocaleString()}</div>` : ''}`;
+  tip.style.display = 'block';
+  tip.style.left = (e.clientX + 14) + 'px';
+  tip.style.top  = (e.clientY - 10) + 'px';
+}
+function histoHideTip() {
+  const tip = document.getElementById('log-histo-tip');
+  if (tip) tip.style.display = 'none';
 }
 function histoClear() {
   state.logHistoFilter.minMs = 0; state.logHistoFilter.maxMs = 0;
@@ -4470,7 +4499,7 @@ function renderTimeline() {
     }
   }
 
-  const S_MT = 38, S_H = 52, S_MB = 22, R = 4, ROW_H = R * 2 + 3;
+  const S_MT = 38, S_H = 38, S_MB = 20, R = 3, ROW_H = R * 2 + 3;
   const placed = [];
   const dotsSvg = events.map(ev => {
     const x = ML + (ev.ms - minMs) / span * chartW;
@@ -4497,7 +4526,7 @@ function renderTimeline() {
   </svg>`;
 
   // ── Section 2: Cross-file Correlation ────────────────────────────────────
-  const LW = 92, NBUCKETS = 60, SW_H = 36, SW_GAP = 6, SW_MT = 38, SW_MB = 20;
+  const LW = 92, NBUCKETS = 60, SW_H = 26, SW_GAP = 4, SW_MT = 38, SW_MB = 18;
   const cSW = W - LW - MR;
 
   const sources = [
