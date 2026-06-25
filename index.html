@@ -4403,89 +4403,6 @@ function paintRows() {
 }
 
 // ─── Timeline ─────────────────────────────────────────────────────────────────
-function buildTimelineData() {
-  const allRows = [];
-  for (const [, rows] of Object.entries(state.parsedLogs)) {
-    for (const r of rows) { if (r.ts) allRows.push(r); }
-  }
-  if (allRows.length < 2) return null;
-
-  const toMs = ts => {
-    const n = normalizeTs(ts);
-    return n ? new Date(n.replace(' ', 'T')).getTime() : 0;
-  };
-  let minMs = Infinity, maxMs = -Infinity, validCount = 0;
-  for (const r of allRows) {
-    const t = toMs(r.ts);
-    if (!t) continue;
-    if (t < minMs) minMs = t;
-    if (t > maxMs) maxMs = t;
-    validCount++;
-  }
-  if (validCount < 2) return null;
-
-  // When zoomed, clamp the time range and filter rows
-  const zoom = tlState.zoom;
-  if (zoom) {
-    minMs = zoom.startMs;
-    maxMs = zoom.endMs;
-  }
-  const rowsInRange = zoom
-    ? allRows.filter(r => { const t = toMs(r.ts); return t && t >= minMs && t <= maxMs; })
-    : allRows;
-
-  const spanMin = (maxMs - minMs) / 60000;
-
-  let bucketMin;
-  if      (spanMin <= 10)   bucketMin = 0.25;   // 15-second buckets
-  else if (spanMin <= 30)   bucketMin = 1;
-  else if (spanMin <= 120)  bucketMin = 5;
-  else if (spanMin <= 480)  bucketMin = 15;
-  else if (spanMin <= 1440) bucketMin = 60;
-  else                      bucketMin = 240;
-
-  const bucketMs   = bucketMin * 60000;
-  const startMs    = Math.floor(minMs / bucketMs) * bucketMs;
-  const numBuckets = Math.max(2, Math.ceil((maxMs - startMs) / bucketMs) + 1);
-
-  const fmtLabel = ms => {
-    const d = new Date(ms);
-    const h = d.getHours().toString().padStart(2,'0');
-    const m = d.getMinutes().toString().padStart(2,'0');
-    const s = d.getSeconds().toString().padStart(2,'0');
-    if (bucketMin >= 1440) return `${d.getMonth()+1}/${d.getDate()}`;
-    if (bucketMin >= 60)   return h === '00' ? `${d.getMonth()+1}/${d.getDate()}` : `${h}:00`;
-    if (bucketMin < 1)     return `${h}:${m}:${s}`;
-    return `${h}:${m}`;
-  };
-
-  const buckets = Array.from({length: numBuckets}, (_, i) => ({
-    ms: startMs + i * bucketMs, label: fmtLabel(startMs + i * bucketMs),
-    error:0, warning:0, info:0, debug:0
-  }));
-
-  for (const r of rowsInRange) {
-    const ms = toMs(r.ts);
-    if (!ms) continue;
-    const idx = Math.min(numBuckets-1, Math.floor((ms - startMs) / bucketMs));
-    if (idx < 0) continue;
-    const b = buckets[idx], lvl = r.level || 'info';
-    if      (lvl === 'error')                     b.error++;
-    else if (lvl === 'warn' || lvl === 'warning') b.warning++;
-    else if (lvl === 'debug' || lvl === 'trace')  b.debug++;
-    else                                           b.info++;
-  }
-  return { buckets, bucketMin, bucketMs };
-}
-
-// Toggle state for timeline series — persists across re-renders
-const tlState = { error:true, warning:true, info:true, debug:false, normalize:false, zoom:null, _brushData:null };
-let _tlBrush = { down:false, startSvgX:0, dragging:false, justZoomed:false };
-
-function tlToggle(key)      { tlState[key] = !tlState[key]; renderTimeline(); }
-function tlSetNormalize(v)  { tlState.normalize = v;        renderTimeline(); }
-function tlResetZoom()      { tlState.zoom = null;          renderTimeline(); }
-
 function renderTimeline() {
   const el = document.getElementById('timeline-content');
   if (!el) return;
@@ -4493,268 +4410,187 @@ function renderTimeline() {
     el.innerHTML = '<div style="text-align:center;padding:60px;color:var(--muted);font-size:13px">Load a diagnostic ZIP to see the timeline.</div>';
     return;
   }
-  const data = buildTimelineData();
-  if (!data) {
-    el.innerHTML = '<div style="text-align:center;padding:60px;color:var(--muted);font-size:13px">Not enough timestamped log data to build a timeline.</div>';
+
+  const allRows = [];
+  for (const [fname, rows] of Object.entries(state.parsedLogs)) {
+    for (const r of rows) {
+      const ms = _tsToMs(r.ts);
+      if (ms) allRows.push({ ms, level: r.level, ts: r.ts || '', msg: r.msg || r.line || '', fname });
+    }
+  }
+  if (allRows.length < 2) {
+    el.innerHTML = '<div style="text-align:center;padding:60px;color:var(--muted);font-size:13px">Not enough timestamped log data.</div>';
     return;
   }
-  const { buckets, bucketMin, bucketMs } = data;
-  const totals = buckets.reduce((a,b) => ({
-    error: a.error+b.error, warning: a.warning+b.warning,
-    info:  a.info +b.info,  debug:   a.debug  +b.debug
-  }), {error:0, warning:0, info:0, debug:0});
 
-  const C = { error:'#f85149', warning:'#e3b341', info:'#58a6ff', debug:'#7d8590' };
+  let minMs = Infinity, maxMs = -Infinity;
+  for (const r of allRows) { if (r.ms < minMs) minMs = r.ms; if (r.ms > maxMs) maxMs = r.ms; }
+  const span = maxMs - minMs || 1;
 
-  // Active series drawn bottom→top: debug, info, warning, error
-  const activeKeys = ['debug','info','warning','error'].filter(k => tlState[k]);
-
-  // ── SVG layout ──
-  const W=900, ML=46, MR=16, MT=28, MB=16;
-  const H_CHART = 240;
-  const CHART_BASE = MT + H_CHART;
-  const TOTAL_H    = CHART_BASE + MB + 20;
+  const W = 900, ML = 10, MR = 10;
   const chartW = W - ML - MR;
-  const bW     = chartW / buckets.length;
-  const barW   = Math.max(1, bW - 0.8);
-  const tickEvery = Math.max(1, Math.round(buckets.length / 11));
 
-  // Peak sum for count mode y-axis
-  let maxV = 1;
-  if (!tlState.normalize) {
-    for (const b of buckets) {
-      const s = activeKeys.reduce((sum,k) => sum+(b[k]||0), 0);
-      if (s > maxV) maxV = s;
+  const TICK_INTERVALS = [1000,2000,5000,10000,15000,30000,60000,120000,300000,600000,900000,1800000,3600000,7200000,10800000,21600000,43200000,86400000,172800000,604800000];
+  const rawInterval = span / Math.round(chartW / 90);
+  const tickInterval = TICK_INTERVALS.reduce((a, b) => Math.abs(b - rawInterval) < Math.abs(a - rawInterval) ? b : a);
+  const firstTick = Math.ceil(minMs / tickInterval) * tickInterval;
+
+  const fmtTick = ms => {
+    const d = new Date(ms);
+    const h = d.getUTCHours().toString().padStart(2, '0');
+    const m = d.getUTCMinutes().toString().padStart(2, '0');
+    return span > 86400000 ? `${d.getUTCMonth()+1}/${d.getUTCDate()} ${h}:${m}` : `${h}:${m}`;
+  };
+
+  const ticks = [];
+  for (let t = firstTick; t <= maxMs; t += tickInterval) ticks.push({ x: ML + (t - minMs) / span * chartW, label: fmtTick(t) });
+
+  function mkAxis(axisY, lm) {
+    const cW = W - lm - MR;
+    return `<line x1="${lm}" y1="${axisY}" x2="${W-MR}" y2="${axisY}" stroke="var(--border)" stroke-width="1"/>` +
+      ticks.map(t => {
+        const x = (lm + (t.x - ML) / chartW * cW).toFixed(1);
+        return `<line x1="${x}" y1="${axisY}" x2="${x}" y2="${axisY+4}" stroke="var(--muted)" stroke-width="1"/>
+          <text x="${x}" y="${axisY+14}" font-size="8" text-anchor="middle" fill="var(--muted)">${esc(t.label)}</text>`;
+      }).join('');
+  }
+
+  // ── Section 1: Connection Lifecycle ───────────────────────────────────────
+  const CATS = [
+    { key: 'conn', color: '#3fb950', label: 'Connected',    re: /connect(?:ed|ing)\b|tunnel.{0,8}(?:up|establ|ready)|gateway.{0,8}(?:up|connect)/i },
+    { key: 'disc', color: '#f85149', label: 'Disconnected', re: /disconnect(?:ed|ing)?\b|tunnel.{0,8}(?:down|clos|drop)|gateway.{0,8}(?:lost|down|fail)/i },
+    { key: 'auth', color: '#e3b341', label: 'Auth',         re: /\bauth(?:entication|enticated|orizing|orized)?\b|token.{0,8}refresh|\bsaml\b|\bidp\b/i },
+    { key: 'npa',  color: '#58a6ff', label: 'NPA',          re: /npa.{0,8}tunnel|private.{0,5}app|publisher.{0,5}connect|broker.{0,8}connect/i },
+  ];
+
+  const events = [];
+  for (const r of allRows) {
+    for (const cat of CATS) {
+      if (cat.re.test(r.msg)) { events.push({ ms: r.ms, cat, ts: r.ts, fname: r.fname }); break; }
     }
   }
 
-  // Grid lines + y-axis labels
-  function yGrid() {
-    return [0, 0.25, 0.5, 0.75, 1].map(f => {
-      const y = (CHART_BASE - f*H_CHART).toFixed(1);
-      const v = tlState.normalize ? `${Math.round(f*100)}%` : Math.round(maxV*f).toLocaleString();
-      return `<line x1="${ML}" y1="${y}" x2="${W-MR}" y2="${y}" stroke="var(--border)" stroke-width="0.5" stroke-dasharray="3,3"/>
-        <text x="${ML-4}" y="${(+y+3).toFixed(1)}" font-size="8" text-anchor="end" fill="var(--muted)">${v}</text>`;
-    }).join('');
-  }
-
-  // Bars — stacked count or 100% normalized
-  const bars = buckets.map((b,i) => {
-    const x = (ML + i*bW).toFixed(1);
-    const total = activeKeys.reduce((s,k) => s+(b[k]||0), 0);
-    let rects = '', cumH = 0;
-    if (total > 0) {
-      for (const k of activeKeys) {
-        const v = b[k]||0; if (!v) continue;
-        const h = tlState.normalize ? (v/total)*H_CHART : (v/maxV)*H_CHART;
-        const ry = (CHART_BASE - cumH - h).toFixed(1);
-        cumH += h;
-        rects += `<rect x="${x}" y="${ry}" width="${barW.toFixed(1)}" height="${Math.max(h,0.5).toFixed(1)}" fill="${C[k]}" opacity="0.88"/>`;
-      }
-    }
-    return `<g class="tl-bucket" style="cursor:pointer"
-      data-label="${esc(b.label)}" data-ms="${b.ms}" data-bmin="${bucketMin}"
-      data-error="${b.error}" data-warning="${b.warning}" data-info="${b.info}" data-debug="${b.debug}"
-      onmouseover="tlShow(event,this)" onmouseout="tlHide()" onclick="tlJump(this)">
-      <rect x="${x}" y="${MT}" width="${barW.toFixed(1)}" height="${H_CHART}" fill="transparent"/>
-      ${rects}
-    </g>`;
+  const S_MT = 38, S_H = 52, S_MB = 22, R = 4, ROW_H = R * 2 + 3;
+  const placed = [];
+  const dotsSvg = events.map(ev => {
+    const x = ML + (ev.ms - minMs) / span * chartW;
+    let row = 0;
+    while (placed.some(p => Math.abs(p.x - x) < R * 3 && p.row === row)) row++;
+    const y = S_MT + S_H - R - row * ROW_H;
+    if (y < S_MT + R) return '';
+    placed.push({ x, row });
+    return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${R}" fill="${ev.cat.color}" opacity="0.85" style="cursor:pointer"
+      data-label="${esc(ev.cat.label)}" data-ts="${esc(ev.ts)}" data-fname="${esc(ev.fname)}" data-ms="${ev.ms}"
+      onmouseover="tlEvTip(event,this)" onmouseout="tlHide()" onclick="tlEvJump(${ev.ms})"/>`;
   }).join('');
 
-  // X-axis ticks
-  const xLabels = buckets.map((b,i) => {
-    if (i%tickEvery !== 0) return '';
-    const x = (ML + (i+0.5)*bW).toFixed(1);
-    return `<line x1="${x}" y1="${CHART_BASE}" x2="${x}" y2="${(CHART_BASE+4).toFixed(1)}" stroke="var(--muted)" stroke-width="1"/>
-      <text x="${x}" y="${(CHART_BASE+13).toFixed(1)}" font-size="8" text-anchor="middle" fill="var(--muted)">${esc(b.label)}</text>`;
+  const legendSvg = CATS.map((c, i) => {
+    const lx = ML + i * 115;
+    return `<circle cx="${lx+4}" cy="${S_MT-17}" r="4" fill="${c.color}"/>
+      <text x="${lx+12}" y="${S_MT-13}" font-size="9" fill="var(--muted)">${c.label}</text>`;
   }).join('');
 
-  const axes = `
-    <line x1="${ML}" y1="${MT}" x2="${ML}" y2="${CHART_BASE}" stroke="var(--border)" stroke-width="1"/>
-    <line x1="${ML}" y1="${CHART_BASE}" x2="${W-MR}" y2="${CHART_BASE}" stroke="var(--border)" stroke-width="1"/>`;
-
-  const legendItems = [['error','Errors'],['warning','Warnings'],['info','Info'],['debug','Debug']];
-  const legendSvg = legendItems.map(([k,lbl],i) => {
-    const active = tlState[k];
-    const lx = (W - MR) - (legendItems.length - i) * 88;
-    return `<rect x="${lx}" y="${MT-11}" width="9" height="9" fill="${active?C[k]:'var(--border)'}" rx="1"/>
-      <text x="${lx+13}" y="${MT-3}" font-size="9" fill="${active?'var(--muted)':'var(--border)'}">${lbl}</text>`;
-  }).join('');
-
-  const titleSvg = `<text x="${ML}" y="${MT-3}" font-size="10" font-weight="600" fill="var(--text)">Log Activity</text>
-    ${legendSvg}`;
-
-  // Store brush mapping data for mouse handlers
-  tlState._brushData = { buckets, bucketMs, w:W, ml:ML, mr:MR, mt:MT, hChart:H_CHART };
-
-  const svg = `<svg id="tl-svg" viewBox="0 0 ${W} ${TOTAL_H}" xmlns="http://www.w3.org/2000/svg"
-    style="width:100%;height:auto;display:block;font-family:var(--font-mono,monospace);user-select:none;cursor:crosshair"
-    onmousedown="tlBrushDown(event)" onmousemove="tlBrushMove(event)"
-    onmouseup="tlBrushUp(event)" onmouseleave="tlBrushCancel()">
-    ${yGrid()}${bars}${axes}${xLabels}${titleSvg}
-    <rect id="tl-bsel" x="${ML}" y="${MT}" width="0" height="${H_CHART}"
-      fill="rgba(88,166,255,0.10)" stroke="#58a6ff" stroke-width="1"
-      pointer-events="none" display="none"/>
+  const lifecycleSvg = `<svg viewBox="0 0 ${W} ${S_MT+S_H+S_MB}" xmlns="http://www.w3.org/2000/svg"
+    style="width:100%;height:auto;display:block;font-family:var(--font-mono,monospace)">
+    <text x="${ML}" y="${S_MT-28}" font-size="10" font-weight="600" fill="var(--text)">Connection Lifecycle</text>
+    ${legendSvg}${dotsSvg}${mkAxis(S_MT+S_H, ML)}
   </svg>`;
 
-  // Filter + mode buttons
-  const filterBtns = [
-    ['error','#f85149','Errors'],['warning','#e3b341','Warnings'],
-    ['info','#58a6ff','Info'],['debug','#7d8590','Debug']
-  ].map(([k,c,lbl]) => {
-    const on = tlState[k];
-    return `<button type="button" class="filter-btn" onclick="tlToggle('${k}')"
-      style="font-size:11px;${on?`background:${c}22;color:${c};border-color:${c}`:''}">${lbl}</button>`;
-  }).join('');
+  // ── Section 2: Cross-file Correlation ────────────────────────────────────
+  const LW = 92, NBUCKETS = 60, SW_H = 36, SW_GAP = 6, SW_MT = 38, SW_MB = 20;
+  const cSW = W - LW - MR;
+
+  const sources = [
+    { label: 'nsdebuglog',  rows: allRows.filter(r => /nsdebuglog/i.test(r.fname)) },
+    { label: 'npadebuglog', rows: allRows.filter(r => /npadebuglog/i.test(r.fname)) },
+  ].filter(s => s.rows.length > 0);
+
+  let swimSvg = `<text x="${LW}" y="${SW_MT-28}" font-size="10" font-weight="600" fill="var(--text)">Log File Correlation</text>
+    <text x="${LW}" y="${SW_MT-14}" font-size="9" fill="var(--muted)">errors + warnings per source — shared time axis</text>`;
+
+  if (sources.length < 2) {
+    swimSvg += `<text x="${W/2}" y="${SW_MT+40}" font-size="10" text-anchor="middle" fill="var(--muted)">Load both nsdebuglog and npadebuglog to see cross-file correlation.</text>`;
+  } else {
+    sources.forEach((src, si) => {
+      const B = Array.from({length: NBUCKETS}, () => ({e:0,w:0}));
+      for (const r of src.rows) {
+        const bi = Math.min(NBUCKETS-1, Math.floor((r.ms - minMs) / span * NBUCKETS));
+        const lv = r.level || '';
+        if (lv === 'error') B[bi].e++;
+        else if (lv === 'warn' || lv === 'warning') B[bi].w++;
+      }
+      const maxCnt = Math.max(1, ...B.map(b => b.e + b.w));
+      const y0 = SW_MT + si * (SW_H + SW_GAP);
+      const bw = cSW / NBUCKETS;
+
+      swimSvg += `<rect x="${LW}" y="${y0}" width="${cSW}" height="${SW_H}" fill="var(--bg0)" rx="2"/>`;
+      swimSvg += `<text x="${LW-5}" y="${(y0+SW_H/2+4).toFixed(1)}" font-size="8" text-anchor="end" fill="var(--muted)">${src.label}</text>`;
+
+      for (let i = 0; i < NBUCKETS; i++) {
+        const b = B[i]; const x = LW + i * bw; let y = y0 + SW_H;
+        const bar = (cnt, fill) => {
+          if (!cnt) return;
+          const bh = Math.max(1.5, SW_H * cnt / maxCnt); y -= bh;
+          swimSvg += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${Math.max(1, bw-0.5).toFixed(1)}" height="${bh.toFixed(1)}" fill="${fill}" opacity="0.9"/>`;
+        };
+        bar(b.w, '#e3b341'); bar(b.e, '#f85149');
+      }
+    });
+    swimSvg += mkAxis(SW_MT + sources.length * (SW_H + SW_GAP), LW);
+  }
+
+  const SWIM_TOTAL = SW_MT + sources.length * (SW_H + SW_GAP) + SW_MB;
+  const correlationSvg = `<svg viewBox="0 0 ${W} ${SWIM_TOTAL}" xmlns="http://www.w3.org/2000/svg"
+    style="width:100%;height:auto;display:block;font-family:var(--font-mono,monospace)">${swimSvg}</svg>`;
 
   el.innerHTML = `
-    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">
-      ${[['Errors','error',C.error],['Warnings','warning',C.warning],
-         ['Info','info',C.info],['Debug','debug',C.debug]].map(([lbl,k,c])=>
-        `<div class="stat-card" style="flex:1;min-width:100px;${tlState[k]?'':'opacity:0.35'}">
-          <div class="stat-label">${lbl}</div>
-          <div class="stat-value" style="color:${c}">${totals[k].toLocaleString()}</div>
-        </div>`).join('')}
+    <div style="background:var(--bg1);border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-bottom:12px;overflow-x:auto">
+      ${lifecycleSvg}
+      ${events.length === 0 ? `<div style="color:var(--muted);font-size:11px;padding:2px 0 0">No connection lifecycle events detected.</div>` : ''}
     </div>
-    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
-      <span style="font-size:10px;color:var(--muted);margin-right:2px">Show:</span>
-      ${filterBtns}
-      <span style="display:inline-block;width:1px;height:16px;background:var(--border);margin:0 4px"></span>
-      <button type="button" class="filter-btn" onclick="tlSetNormalize(false)"
-        style="font-size:11px;${!tlState.normalize?'background:var(--bg3);color:var(--text);border-color:var(--primary)':''}">＃ Count</button>
-      <button type="button" class="filter-btn" onclick="tlSetNormalize(true)"
-        style="font-size:11px;${tlState.normalize?'background:var(--bg3);color:var(--text);border-color:var(--primary)':''}">% Normalize</button>
-      <span style="flex:1"></span>
-      ${tlState.zoom ? `<button type="button" class="filter-btn" onclick="tlResetZoom()"
-        style="font-size:11px;background:rgba(88,166,255,0.12);color:#58a6ff;border-color:#58a6ff">↩ Reset Zoom</button>` : ''}
-      <span style="font-size:10px;color:var(--muted)">${bucketMin < 1 ? `${bucketMin*60}-sec` : `${bucketMin}-min`} buckets · ${buckets.length} intervals${tlState.zoom ? ' · <strong style="color:#58a6ff">zoomed</strong>' : ''} · drag to zoom · click jumps to Log Viewer</span>
+    <div style="background:var(--bg1);border:1px solid var(--border);border-radius:8px;padding:12px 14px;overflow-x:auto">
+      ${correlationSvg}
     </div>
-    <div style="background:var(--bg1);border:1px solid var(--border);border-radius:8px;padding:12px;overflow-x:auto">${svg}</div>
-    <div id="tl-tooltip" style="display:none;position:fixed;background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-size:11px;color:var(--text);pointer-events:none;z-index:9999;min-width:150px"></div>`;
+    <div style="margin-top:8px;font-size:10px;color:var(--muted);text-align:right">
+      ${events.length.toLocaleString()} lifecycle events · ${allRows.length.toLocaleString()} total rows · click a dot to jump to Log Viewer
+    </div>
+    <div id="tl-tooltip" style="display:none;position:fixed;background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-size:11px;color:var(--text);pointer-events:none;z-index:9999;min-width:160px"></div>`;
 }
 
-function tlShow(event, g) {
+function tlEvTip(event, el) {
   const tip = document.getElementById('tl-tooltip');
   if (!tip) return;
-  const d = g.dataset;
-  const total = +d.error + +d.warning + +d.info + +d.debug;
-  const pct = v => total > 0 ? ` <span style="opacity:.55;font-size:10px">(${Math.round(+v/total*100)}%)</span>` : '';
-  const rows = [
-    [d.error,   '#f85149', 'Errors'],
-    [d.warning, '#e3b341', 'Warnings'],
-    [d.info,    '#58a6ff', 'Info'],
-    [d.debug,   '#7d8590', 'Debug'],
-  ].filter(([v]) => +v > 0)
-   .map(([v,c,lbl]) => `<div><span class="tl-dot" style="background:${c}"></span>${lbl}: <strong>${(+v).toLocaleString()}</strong>${pct(v)}</div>`)
-   .join('');
-  const totalRow = total > 0 ? `<div style="margin-top:4px;padding-top:4px;border-top:1px solid var(--border);opacity:.7">Total: ${total.toLocaleString()}</div>` : '';
-  tip.innerHTML = `<div style="font-weight:600;margin-bottom:4px;padding-bottom:3px;border-bottom:1px solid var(--border)">${esc(d.label)}</div>${rows||'<em style="opacity:.5">No data</em>'}${totalRow}`;
+  const d = el.dataset;
+  tip.innerHTML = `<div style="font-weight:600;margin-bottom:3px;color:${esc(el.getAttribute('fill'))}">${esc(d.label)}</div>
+    <div style="opacity:.7;font-size:10px">${esc(d.ts)}</div>
+    <div style="opacity:.55;font-size:10px">${esc(d.fname)}</div>`;
   tip.style.display = 'block';
-  tip.style.left = (event.clientX+14)+'px';
-  tip.style.top  = (event.clientY-10)+'px';
+  tip.style.left = (event.clientX + 14) + 'px';
+  tip.style.top  = (event.clientY - 10) + 'px';
+}
+
+function tlEvJump(ms) {
+  tlHide();
+  const d = new Date(ms);
+  const pad = n => n.toString().padStart(2, '0');
+  const Y = d.getUTCFullYear(), M = pad(d.getUTCMonth()+1), D = pad(d.getUTCDate());
+  const H = pad(d.getUTCHours()), Min = pad(d.getUTCMinutes()), S = pad(d.getUTCSeconds());
+  const pattern = `${Y}[-/]${M}[-/]${D} ${H}:${Min}:${S}`;
+  const inp = document.getElementById('log-search');
+  if (inp) inp.value = pattern;
+  state.logRegexMode = true;
+  state.logCompiledRe = new RegExp(pattern);
+  state.searchQuery   = pattern;
+  document.getElementById('log-regex-btn')?.classList.add('regex-active');
+  const allBtn = document.getElementById('log-allfiles-btn');
+  if (!state.globalSearchMode) toggleGlobalSearch(allBtn);
+  else runGlobalSearch();
+  setActiveTab('logs');
 }
 
 function tlHide() {
   const tip = document.getElementById('tl-tooltip');
   if (tip) tip.style.display = 'none';
-}
-
-function tlSvgX(event) {
-  const svg = document.getElementById('tl-svg');
-  if (!svg) return 0;
-  const rect = svg.getBoundingClientRect();
-  const w = (tlState._brushData && tlState._brushData.w) || 900;
-  return (event.clientX - rect.left) * (w / rect.width);
-}
-
-function tlBrushDown(event) {
-  const svgX = tlSvgX(event);
-  const bd = tlState._brushData;
-  if (!bd || svgX < bd.ml || svgX > bd.w - bd.mr) return;
-  _tlBrush = { down:true, startSvgX:svgX, dragging:false, justZoomed:false };
-}
-
-function tlBrushMove(event) {
-  if (!_tlBrush.down) return;
-  const bd = tlState._brushData;
-  if (!bd) return;
-  const svgX = Math.max(bd.ml, Math.min(bd.w - bd.mr, tlSvgX(event)));
-  const dx = Math.abs(svgX - _tlBrush.startSvgX);
-  if (dx > 6) {
-    _tlBrush.dragging = true;
-    tlHide();
-    const bsel = document.getElementById('tl-bsel');
-    if (bsel) {
-      const x1 = Math.min(_tlBrush.startSvgX, svgX);
-      const x2 = Math.max(_tlBrush.startSvgX, svgX);
-      bsel.setAttribute('x', x1.toFixed(1));
-      bsel.setAttribute('width', (x2 - x1).toFixed(1));
-      bsel.removeAttribute('display');
-    }
-  }
-}
-
-function tlBrushUp(event) {
-  if (!_tlBrush.down) return;
-  const endSvgX = tlSvgX(event);
-  const startSvgX = _tlBrush.startSvgX;
-  const wasDragging = _tlBrush.dragging;
-  _tlBrush = { down:false, startSvgX:0, dragging:false, justZoomed:false };
-  const bsel = document.getElementById('tl-bsel');
-  if (bsel) bsel.setAttribute('display', 'none');
-  if (!wasDragging) return;
-
-  const bd = tlState._brushData;
-  if (!bd) return;
-  const { buckets, bucketMs, w, ml, mr } = bd;
-  const chartW = w - ml - mr;
-  const svgMin = Math.max(ml, Math.min(startSvgX, endSvgX));
-  const svgMax = Math.min(w - mr, Math.max(startSvgX, endSvgX));
-
-  const startIdx = Math.max(0, Math.floor((svgMin - ml) / chartW * buckets.length));
-  const endIdx   = Math.min(buckets.length - 1, Math.floor((svgMax - ml) / chartW * buckets.length));
-  if (endIdx <= startIdx) return;
-
-  tlState.zoom = { startMs: buckets[startIdx].ms, endMs: buckets[endIdx].ms + bucketMs };
-  _tlBrush.justZoomed = true;
-  renderTimeline();
-}
-
-function tlBrushCancel() {
-  if (!_tlBrush.down) return;
-  _tlBrush = { down:false, startSvgX:0, dragging:false, justZoomed:false };
-  const bsel = document.getElementById('tl-bsel');
-  if (bsel) bsel.setAttribute('display', 'none');
-}
-
-function tlJump(g) {
-  if (_tlBrush.justZoomed) { _tlBrush.justZoomed = false; return; }
-  tlHide();
-  const ms = +g.dataset.ms, bmin = +g.dataset.bmin;
-  const d   = new Date(ms);
-  const pad = n => n.toString().padStart(2,'0');
-  const Y = d.getFullYear(), M = pad(d.getMonth()+1), D = pad(d.getDate());
-  const H = pad(d.getHours()), Min = pad(d.getMinutes());
-  // [-/] matches both nsdebuglog (2026/04/20) and npadebuglog (2026-04-20) formats
-  const pattern = bmin >= 60
-    ? `${Y}[-/]${M}[-/]${D} ${H}:`
-    : `${Y}[-/]${M}[-/]${D} ${H}:${Min}`;
-
-  const inp = document.getElementById('log-search');
-  if (inp) inp.value = pattern;
-
-  // Enable regex mode so both date-separator formats match
-  state.logRegexMode = true;
-  state.logCompiledRe = new RegExp(pattern);
-  state.searchQuery   = pattern;
-  document.getElementById('log-regex-btn')?.classList.add('regex-active');
-
-  // All Files mode so results span every loaded log file
-  const allBtn = document.getElementById('log-allfiles-btn');
-  if (!state.globalSearchMode) toggleGlobalSearch(allBtn);
-  else runGlobalSearch();
-
-  setActiveTab('logs');
 }
 
 // ─── Tabs ─────────────────────────────────────────────────────────────────────
