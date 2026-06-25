@@ -338,17 +338,17 @@ body {
 /* Virtual log list */
 .log-histo-wrap {
   flex-shrink: 0;
+  height: 72px;
   position: relative;
-  background: var(--bg2);
+  background: var(--bg1);
   border-bottom: 1px solid var(--border);
   display: none;
   user-select: none;
-  padding: 5px 0 0;
 }
-.log-histo-wrap canvas { display: block; width: 100%; }
+.log-histo-wrap svg { display: block; width: 100%; cursor: crosshair; }
 .log-histo-label {
   position: absolute;
-  top: 8px;
+  bottom: 3px;
   left: 8px;
   font-size: 9px;
   color: var(--muted);
@@ -356,7 +356,7 @@ body {
 }
 .log-histo-clear {
   position: absolute;
-  top: 6px;
+  top: 4px;
   right: 6px;
   font-size: 10px;
   padding: 1px 7px;
@@ -830,10 +830,9 @@ body {
     </div>
     <!-- Log density histogram -->
     <div class="log-histo-wrap" id="log-histo-wrap">
-      <canvas id="log-histo-bars" style="height:50px;cursor:crosshair"
-              onmousedown="histoMouseDown(event)" onmousemove="histoMouseMove(event)"
-              onmouseup="histoMouseUp(event)" onmouseleave="histoMouseLeave(event)"></canvas>
-      <canvas id="log-histo-xaxis" style="height:18px"></canvas>
+      <svg id="log-histo-svg" height="60"
+           onmousedown="histoMouseDown(event)" onmousemove="histoMouseMove(event)"
+           onmouseup="histoMouseUp(event)" onmouseleave="histoMouseLeave(event)"></svg>
       <div class="log-histo-label" id="log-histo-label"></div>
       <button class="log-histo-clear" id="log-histo-clear" onclick="histoClear()">✕ Clear filter</button>
     </div>
@@ -4111,7 +4110,9 @@ function _execGlobalSearch() {
 
 // ─── Log Histogram ────────────────────────────────────────────────────────────
 const _HISTO_N = 80;   // number of buckets
-// (legacy SVG constants removed — canvas uses actual pixel dimensions)
+const _HISTO_W = 800;  // SVG viewBox width
+const _HISTO_BH = 50;  // bar area height in SVG units
+const _HISTO_LH = 12;  // x-label area height
 
 const _histo = { minMs: 0, maxMs: 0, dragging: false, dragF0: 0, dragF1: 0 };
 
@@ -4127,11 +4128,10 @@ function _tsToMs(ts) {
 
 function buildLogHistogram(allRows) {
   const wrap  = document.getElementById('log-histo-wrap');
-  const bcanv = document.getElementById('log-histo-bars');
-  const xcanv = document.getElementById('log-histo-xaxis');
+  const svg   = document.getElementById('log-histo-svg');
   const label = document.getElementById('log-histo-label');
   const clear = document.getElementById('log-histo-clear');
-  if (!wrap || !bcanv) return;
+  if (!wrap || !svg) return;
 
   const pts = allRows.map(r => ({ ms: _tsToMs(r.ts), lv: r.level })).filter(p => p.ms > 0);
   if (pts.length < 2) { wrap.style.display = 'none'; return; }
@@ -4147,126 +4147,72 @@ function buildLogHistogram(allRows) {
   for (const p of pts) {
     const bi = Math.min(_HISTO_N - 1, Math.floor((p.ms - minMs) / span * _HISTO_N));
     const b = B[bi];
-    if (p.lv === 'error')                                              b.e++;
-    else if (p.lv === 'warn' || p.lv === 'warning')                   b.w++;
+    if (p.lv === 'error')                                     b.e++;
+    else if (p.lv === 'warn' || p.lv === 'warning')          b.w++;
     else if (p.lv === 'debug' || p.lv === 'trace' || p.lv === 'verbose') b.d++;
-    else                                                               b.i++;
+    else                                                      b.i++;
   }
-
-  // ── Bars canvas (DPR-aware) ──────────────────────────────────────
-  const dpr = window.devicePixelRatio || 1;
-  const W   = bcanv.parentElement.clientWidth;
-  const H   = 50;
-  bcanv.width  = Math.round(W * dpr);
-  bcanv.height = Math.round(H * dpr);
-  bcanv.style.width  = W + 'px';
-  bcanv.style.height = H + 'px';
-  const ctx = bcanv.getContext('2d');
-  ctx.scale(dpr, dpr);
 
   const maxCnt = Math.max(1, ...B.map(b => b.e + b.w + b.i + b.d));
-  const bw  = W / _HISTO_N;
+  const bw = _HISTO_W / _HISTO_N;
   const gap = bw > 3 ? 0.8 : 0;
+  const bh = n => Math.max(n > 0 ? 1.5 : 0, _HISTO_BH * n / maxCnt);
 
-  ctx.clearRect(0, 0, W, H);
+  let bars = '';
   for (let i = 0; i < _HISTO_N; i++) {
-    const b = B[i]; const x = i * bw; let y = H;
-    const bar = (cnt, fill) => {
+    const b = B[i]; const x = (i * bw).toFixed(2); const w = (bw - gap).toFixed(2);
+    let y = _HISTO_BH;
+    const r = (cnt, fill) => {
       if (!cnt) return;
-      const bh = Math.max(1.5, H * cnt / maxCnt); y -= bh;
-      ctx.fillStyle = fill;
-      ctx.fillRect(x + gap / 2, y, bw - gap, bh);
+      const h = bh(cnt); y -= h;
+      bars += `<rect x="${x}" y="${y.toFixed(2)}" width="${w}" height="${h.toFixed(2)}" fill="${fill}"/>`;
     };
-    bar(b.d, '#3d444d'); bar(b.i, '#1f6feb'); bar(b.w, '#d29922'); bar(b.e, '#f85149');
+    r(b.d, '#3d444d'); r(b.i, '#1f6feb'); r(b.w, '#d29922'); r(b.e, '#f85149');
   }
 
-  // Active filter overlay
+  // X-axis time labels
+  const fmtLbl = ms => new Date(ms).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
+  let xlabels = '';
+  for (let i = 0; i <= 5; i++) {
+    const frac = i / 5;
+    const x = (frac * _HISTO_W).toFixed(1);
+    const anchor = i === 0 ? 'start' : i === 5 ? 'end' : 'middle';
+    xlabels += `<text x="${x}" y="${_HISTO_BH + 9}" fill="#6e7681" font-size="7.5" text-anchor="${anchor}" font-family="monospace">${fmtLbl(minMs + frac * span)}</text>`;
+  }
+
+  // Active filter + drag selection overlay
   const f = state.logHistoFilter;
-  if (f.minMs) {
-    const x1 = Math.max(0, (f.minMs - minMs) / span * W);
-    const x2 = Math.min(W, (f.maxMs - minMs) / span * W);
-    ctx.fillStyle = 'rgba(88,166,255,.13)';
-    ctx.fillRect(x1, 0, x2 - x1, H);
-    ctx.strokeStyle = 'rgba(88,166,255,.55)';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(x1 + 0.5, 0.5, x2 - x1 - 1, H - 1);
+  let sel = '';
+  const selF0 = f.minMs ? Math.max(0, (f.minMs - minMs) / span) : null;
+  const selF1 = f.maxMs ? Math.min(1, (f.maxMs - minMs) / span) : null;
+  if (selF0 !== null && selF1 !== null) {
+    const sx = (selF0 * _HISTO_W).toFixed(1), sw = ((selF1 - selF0) * _HISTO_W).toFixed(1);
+    sel = `<rect x="${sx}" y="0" width="${sw}" height="${_HISTO_BH}" fill="rgba(88,166,255,.13)" stroke="rgba(88,166,255,.5)" stroke-width="1"/>`;
   }
-
   // Live drag rect
   if (_histo.dragging) {
     const f0 = Math.min(_histo.dragF0, _histo.dragF1);
     const f1 = Math.max(_histo.dragF0, _histo.dragF1);
-    const dx = f0 * W, dw = (f1 - f0) * W;
-    ctx.fillStyle = 'rgba(88,166,255,.18)';
-    ctx.fillRect(dx, 0, dw, H);
-    ctx.strokeStyle = '#58a6ff';
-    ctx.lineWidth = 1.5;
-    ctx.setLineDash([3, 3]);
-    ctx.strokeRect(dx + 0.5, 0.5, dw - 1, H - 1);
-    ctx.setLineDash([]);
+    const dx = (f0 * _HISTO_W).toFixed(1), dw = ((f1 - f0) * _HISTO_W).toFixed(1);
+    sel += `<rect x="${dx}" y="0" width="${dw}" height="${_HISTO_BH}" fill="rgba(88,166,255,.18)" stroke="#58a6ff" stroke-width="1"/>`;
   }
 
-  // ── X-axis canvas ────────────────────────────────────────────────
-  if (xcanv) {
-    const XH = 18;
-    xcanv.width  = Math.round(W * dpr);
-    xcanv.height = Math.round(XH * dpr);
-    xcanv.style.width  = W + 'px';
-    xcanv.style.height = XH + 'px';
-    const xctx = xcanv.getContext('2d');
-    xctx.scale(dpr, dpr);
-    xctx.clearRect(0, 0, W, XH);
+  const VH = _HISTO_BH + _HISTO_LH;
+  svg.setAttribute('viewBox', `0 0 ${_HISTO_W} ${VH}`);
+  svg.setAttribute('preserveAspectRatio', 'none');
+  svg.innerHTML = `<g>${bars}</g>${xlabels}${sel}`;
 
-    // Smart tick interval — target ~6–8 ticks
-    const TICK_INTERVALS = [
-      1000, 2000, 5000, 10000, 15000, 30000,
-      60000, 120000, 300000, 600000, 900000, 1800000,
-      3600000, 7200000, 10800000, 21600000, 43200000,
-      86400000, 172800000, 604800000,
-    ];
-    const targetTicks = Math.max(2, Math.round(W / 110));
-    const rawInterval = span / targetTicks;
-    const tickInterval = TICK_INTERVALS.reduce((prev, curr) =>
-      Math.abs(curr - rawInterval) < Math.abs(prev - rawInterval) ? curr : prev
-    );
-    const firstTick = Math.ceil(minMs / tickInterval) * tickInterval;
-
-    const fmtTick = ms => {
-      const d = new Date(ms);
-      const p = n => String(n).padStart(2, '0');
-      if (tickInterval >= 86400000) return `${d.getUTCMonth()+1}/${d.getUTCDate()}`;
-      if (tickInterval >= 3600000)  return `${p(d.getUTCHours())}:00`;
-      return `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
-    };
-
-    xctx.font = '9px monospace';
-    xctx.fillStyle  = 'rgba(139,148,158,.75)';
-    xctx.strokeStyle = 'rgba(139,148,158,.28)';
-    xctx.lineWidth  = 1;
-    xctx.textAlign  = 'center';
-
-    for (let t = firstTick; t <= maxMs; t += tickInterval) {
-      const x = (t - minMs) / span * W;
-      if (x < 0 || x > W) continue;
-      xctx.beginPath(); xctx.moveTo(x, 0); xctx.lineTo(x, 4); xctx.stroke();
-      const lbl = fmtTick(t);
-      const lw  = xctx.measureText(lbl).width;
-      const lx  = Math.max(lw / 2 + 2, Math.min(W - lw / 2 - 2, x));
-      xctx.fillText(lbl, lx, 14);
-    }
-  }
-
-  // Row count / bucket label
+  // Legend pills (top-left corner)
   const bucketMs = span / _HISTO_N;
-  const bLabel = bucketMs < 60e3   ? `${Math.round(bucketMs/1e3)}s/bar`
-               : bucketMs < 3600e3 ? `${Math.round(bucketMs/60e3)}m/bar`
-               :                     `${Math.round(bucketMs/3600e3)}h/bar`;
-  if (label) label.textContent = `${pts.length.toLocaleString()} rows · ${bLabel}`;
+  const bLabel = bucketMs < 60e3 ? `${Math.round(bucketMs/1e3)}s/bar`
+    : bucketMs < 3600e3 ? `${Math.round(bucketMs/60e3)}m/bar`
+    : `${Math.round(bucketMs/3600e3)}h/bar`;
+  label.textContent = `${pts.length.toLocaleString()} rows · ${bLabel}`;
   if (clear) clear.style.display = f.minMs ? '' : 'none';
 }
 
 function _histoFrac(e) {
-  const r = document.getElementById('log-histo-bars').getBoundingClientRect();
+  const r = document.getElementById('log-histo-svg').getBoundingClientRect();
   return Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
 }
 function histoMouseDown(e) {
