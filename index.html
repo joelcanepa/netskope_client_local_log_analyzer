@@ -3961,6 +3961,12 @@ function _execGlobalSearch() {
       </div>`;
     }).join('');
 
+    if (total === 0) {
+      el.innerHTML = `<div style="color:var(--muted);text-align:center;padding:60px 20px;font-size:12px">
+        ${hf.minMs ? 'No log entries in the selected time range. Click <b>✕ Clear filter</b> to show all.' : 'No log entries found.'}
+      </div>`;
+      return;
+    }
     el.innerHTML = `
       ${total > MAX_DISPLAY ? `<div style="padding:6px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;margin-bottom:10px;font-size:11px;color:var(--muted)">
         Showing ${state.logSortDesc ? 'latest' : 'earliest'} ${MAX_DISPLAY.toLocaleString()} of ${total.toLocaleString()} total lines. Search above to find specific events.
@@ -4240,9 +4246,10 @@ function histoMouseUp(e) {
 }
 function histoMouseLeave(e) {
   if (!_histo.dragging) return;
-  _histo.dragging = false; _histo.dragF1 = _histoFrac(e);
-  // Treat leaving as completing the drag
-  histoMouseUp(e);
+  _histo.dragging = false;
+  // Cancel drag — do not apply filter, just redraw to clear the overlay rect
+  const rows = state.globalSearchMode ? buildGlobalLogIndex() : (state.parsedLogs[state.currentFile] || []);
+  buildLogHistogram(rows);
 }
 function histoClear() {
   state.logHistoFilter.minMs = 0; state.logHistoFilter.maxMs = 0;
@@ -4265,6 +4272,15 @@ function renderVirtualLog() {
   const scroller = document.getElementById('log-scroller');
   const visRows  = document.getElementById('log-visible-rows');
   const total = state.filteredRows.length;
+
+  if (total === 0) {
+    scroller.style.height = '0px';
+    const hf = state.logHistoFilter;
+    visRows.innerHTML = `<div style="color:var(--muted);text-align:center;padding:60px 20px;font-size:12px">
+      ${hf.minMs ? 'No log entries in the selected time range. Click <b>✕ Clear filter</b> to show all.' : 'No matching log entries.'}
+    </div>`;
+    return;
+  }
 
   scroller.style.height = (total * ROW_H) + 'px';
 
