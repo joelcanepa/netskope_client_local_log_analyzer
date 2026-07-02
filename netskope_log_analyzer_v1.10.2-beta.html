@@ -2664,7 +2664,12 @@ function detectFindings() {
   return detected;
 }
 
+let _findingsCat = 'all';
+let _findingsSev = 'all';
+
 function renderFindings() {
+  _findingsCat = 'all';
+  _findingsSev = 'all';
   const detected  = detectFindings();
   const actionable = detected.filter(d => d.severity === 'high' || d.severity === 'medium').length;
 
@@ -2865,8 +2870,8 @@ function dismissFinding(id) {
 
 function findingsApplyFilters() {
   const q           = (document.getElementById('findings-search')?.value || '').toLowerCase().trim();
-  const activeCat   = document.querySelector('#findings-cat-group .fl-fbtn.active')?.dataset.f || 'all';
-  const activeSev   = document.querySelector('#findings-sev-group .fl-fbtn.active')?.dataset.s || 'all';
+  const activeCat   = _findingsCat;
+  const activeSev   = _findingsSev;
   const hideReviewed = document.getElementById('findings-hide-reviewed')?.checked;
 
   document.querySelectorAll('.finding-card').forEach(c => {
@@ -2887,12 +2892,14 @@ function findingsApplyFilters() {
 }
 
 function findingsFilterCat(cat, btn) {
+  _findingsCat = cat;
   document.querySelectorAll('#findings-cat-group .fl-fbtn').forEach(b =>
     b.classList.toggle('active', b === btn));
   findingsApplyFilters();
 }
 
 function findingsSevFilter(sev, btn) {
+  _findingsSev = sev;
   document.querySelectorAll('#findings-sev-group .fl-fbtn').forEach(b =>
     b.classList.toggle('active', b === btn));
   findingsApplyFilters();
