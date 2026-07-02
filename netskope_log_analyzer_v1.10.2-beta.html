@@ -7167,6 +7167,8 @@ function flShellHTML() {
         <button class="fl-fbtn"        data-f="steered"  onclick="flSetFilter('steered',this)">Steered</button>
         <button class="fl-fbtn"        data-f="bypassed" onclick="flSetFilter('bypassed',this)">Bypassed</button>
         <button class="fl-fbtn"        data-f="mixed"    onclick="flSetFilter('mixed',this)">Mixed</button>
+        <button class="fl-fbtn"        data-f="domain"   onclick="flSetFilter('domain',this)">Domain</button>
+        <button class="fl-fbtn"        data-f="process"  onclick="flSetFilter('process',this)">Process</button>
       </div>
     </div>
     <div id="fl-group-list" style="flex:1;overflow-y:auto"></div>
@@ -7249,11 +7251,18 @@ function flSetFilter(f, btn) {
 }
 function flApplyFilters() {
   const { groups, searchQuery, showFilter } = flState;
+  const isIP = d => /^\d{1,3}(\.\d{1,3}){3}$/.test(d);
   flState.filteredGroups = groups.filter(g => {
-    if (searchQuery && !g.domain.includes(searchQuery)) return false;
     if (showFilter === 'steered'  && g.steered === 0) return false;
     if (showFilter === 'bypassed' && g.bypassed === 0) return false;
     if (showFilter === 'mixed'    && (g.steered === 0 || g.bypassed === 0)) return false;
+    if (showFilter === 'domain'   && isIP(g.domain)) return false;
+    if (showFilter === 'process'  && Object.keys(g.procMap).length === 0) return false;
+    if (searchQuery) {
+      const domainMatch = g.domain.includes(searchQuery);
+      const procMatch   = Object.keys(g.procMap).some(p => p.toLowerCase().includes(searchQuery));
+      if (!domainMatch && !procMatch) return false;
+    }
     return true;
   });
   flRenderGroupList();
