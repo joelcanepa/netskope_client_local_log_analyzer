@@ -7279,27 +7279,39 @@ function flApplyFilters() {
 }
 
 function flRenderGroupList() {
-  const { filteredGroups, selectedGroupIdx } = flState;
+  const { filteredGroups, selectedGroupIdx, showDest } = flState;
   const el = document.getElementById('fl-group-list');
   if (!el) return;
+  const procMode = showDest === 'process';
   el.innerHTML = filteredGroups.map((g, i) => {
-    const total = g.steered + g.bypassed;
     const isMixed = g.steered > 0 && g.bypassed > 0;
     const c = isMixed ? '#58a6ff' : g.bypassed > 0 ? '#d29922' : '#3fb950';
     const sym = isMixed ? '◈' : g.bypassed > 0 ? '⚠' : '✓';
-    const procCount = Object.keys(g.procMap).length;
+    const procNames = Object.keys(g.procMap);
+    const procCount = procNames.length;
     const hostCount = Object.keys(g.hosts).length;
+    let primaryLabel, primaryTitle, subLine;
+    if (procMode && procCount > 0) {
+      const shown = procNames.slice(0, 2).map(p => esc(p)).join(', ');
+      primaryLabel = shown + (procCount > 2 ? ` <span style="opacity:.5">+${procCount-2}</span>` : '');
+      primaryTitle = procNames.join(', ');
+      subLine = `<span title="${esc(g.domain)}">${esc(g.domain)}</span><span>·</span>
+        <span style="color:#3fb950">${g.steered}▲</span>
+        <span style="color:${g.bypassed>0?'#d29922':'var(--muted)'}">${g.bypassed}⚠</span>`;
+    } else {
+      primaryLabel = esc(g.domain);
+      primaryTitle = g.domain;
+      subLine = `<span>${procCount} app${procCount!==1?'s':''}</span><span>·</span>
+        <span>${hostCount} host${hostCount!==1?'s':''}</span><span>·</span>
+        <span style="color:#3fb950">${g.steered}▲</span>
+        <span style="color:${g.bypassed>0?'#d29922':'var(--muted)'}">${g.bypassed}⚠</span>`;
+    }
     return `<div class="fl-gi ${i===selectedGroupIdx?'sel':''}" onclick="flSelectGroup(${i})">
       <div style="display:flex;align-items:center;gap:5px;margin-bottom:2px">
         <span style="color:${c};font-size:11px;flex-shrink:0">${sym}</span>
-        <span style="font-size:11px;font-weight:500;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(g.domain)}">${esc(g.domain)}</span>
+        <span style="font-size:11px;font-weight:500;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${primaryTitle}">${primaryLabel}</span>
       </div>
-      <div style="font-size:10px;color:var(--muted);display:flex;gap:6px">
-        <span>${procCount} app${procCount!==1?'s':''}</span><span>·</span>
-        <span>${hostCount} host${hostCount!==1?'s':''}</span><span>·</span>
-        <span style="color:#3fb950">${g.steered}▲</span>
-        <span style="color:${g.bypassed>0?'#d29922':'var(--muted)'}">${g.bypassed}⚠</span>
-      </div>
+      <div style="font-size:10px;color:var(--muted);display:flex;gap:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${subLine}</div>
     </div>`;
   }).join('');
 }
