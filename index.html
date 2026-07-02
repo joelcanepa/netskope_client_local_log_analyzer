@@ -2685,7 +2685,7 @@ function renderFindings() {
   for (const d of detected) byCategory[d.category] = (byCategory[d.category] || 0) + 1;
   const chips = Object.entries(byCategory).map(([cat, n]) => {
     const c = CATEGORIES[cat] || { label: cat, color: '#8b949e' };
-    return `<button class="fl-fbtn" onclick="findingsFilterCat('${cat}',this)"
+    return `<button class="fl-fbtn" data-f="${cat}" onclick="findingsFilterCat('${cat}',this)"
       style="background:${c.color}18;color:${c.color};border-color:${c.color}44">${c.label} ${n}</button>`;
   }).join('');
 
@@ -6522,14 +6522,17 @@ function renderNPA() {
   // ── Private Apps table ────────────────────────────────────────────────────
   const appsTable = privateApps.length === 0 ? `
     <div style="color:var(--muted);padding:12px;font-size:12px">No private app (SRP) rules detected in this log</div>` : `
-    <div class="error-table" style="margin-bottom:20px">
+    <input id="npa-search" class="search-box" placeholder="🔍 Filter by app, policy, or destination…"
+      oninput="npaSearch(this.value)" style="width:100%;box-sizing:border-box;margin-bottom:8px;font-size:12px">
+    <div class="error-table" id="npa-apps-table" style="margin-bottom:20px">
       <table>
         <thead><tr>
           <th>App Name</th><th>Policy</th><th>Destination</th><th>Port</th><th>Proto</th><th>Action</th><th>Seen</th>
         </tr></thead>
         <tbody>
-          ${privateApps.map(a => `
-            <tr>
+          ${privateApps.map(a => {
+            const searchKey = [a.appName, a.policy, a.destHost, a.destPort].join('\t').toLowerCase();
+            return `<tr data-search="${esc(searchKey)}">
               <td style="font-weight:600;color:var(--primary)">${esc(a.appName)}</td>
               <td style="font-size:11px;color:var(--text)">${esc(a.policy)}</td>
               <td style="font-family:monospace;font-size:11px">${esc(a.destHost)}</td>
@@ -6537,7 +6540,8 @@ function renderNPA() {
               <td><span class="badge badge-blue" style="font-size:10px">${esc(a.proto)}</span></td>
               <td><span class="badge ${a.action === 'forward' ? 'badge-blue' : 'badge-red'}" style="font-size:10px">${esc(a.action)}</span></td>
               <td style="color:var(--muted);font-size:11px">${a.count}×</td>
-            </tr>`).join('')}
+            </tr>`;
+          }).join('')}
         </tbody>
       </table>
     </div>`;
@@ -6583,6 +6587,13 @@ function renderNPA() {
     ${sessTable}`;
 }
 
+
+function npaSearch(q) {
+  const term = q.toLowerCase().trim();
+  document.querySelectorAll('#npa-apps-table tbody tr').forEach(row => {
+    row.style.display = !term || (row.dataset.search || '').includes(term) ? '' : 'none';
+  });
+}
 
 // ─── Chart Helpers ────────────────────────────────────────────────────────────
 function showChartTip(ev, html) {
