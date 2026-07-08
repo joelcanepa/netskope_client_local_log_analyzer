@@ -1510,7 +1510,12 @@ function renderDeviceBar() {
       <span class="dev-label">${label}</span>
       <span class="dev-value">${esc(val)}</span>
     </div>
-  `).join('') + `<div style="margin-left:auto"></div>`;
+  `).join('') +
+  `<div class="dev-field" id="bar-timerange" style="display:none">
+    <span class="dev-label">Log Range</span>
+    <span class="dev-value"></span>
+  </div>` +
+  `<div style="margin-left:auto"></div>`;
 
   document.getElementById('header-sub').textContent =
     s['Hostname'] ? `${s['Hostname']} — ${userDisplay || ''}` : 'Loaded';
@@ -4285,6 +4290,36 @@ function buildLogHistogram(allRows) {
                :                     `${Math.round(bucketMs / 3600e3)}h/bar`;
   if (label) label.textContent = `${pts.length.toLocaleString()} rows · ${bLabel}`;
   if (clear) clear.style.display = f.minMs ? '' : 'none';
+  updateBarTimeframe();
+}
+
+function updateBarTimeframe() {
+  const el = document.getElementById('bar-timerange');
+  if (!el) return;
+  const allRows = Object.values(state.parsedLogs).flat();
+  if (!allRows.length) { el.style.display = 'none'; return; }
+  let fullMin = Infinity, fullMax = -Infinity;
+  for (const r of allRows) { const ms = _tsToMs(r.ts); if (ms) { if (ms < fullMin) fullMin = ms; if (ms > fullMax) fullMax = ms; } }
+  if (!isFinite(fullMin)) { el.style.display = 'none'; return; }
+  const hf = state.logHistoFilter;
+  const isFiltered = hf.minMs > 0;
+  const dispMin = isFiltered ? hf.minMs : fullMin;
+  const dispMax = isFiltered ? hf.maxMs : fullMax;
+  const p = n => String(n).padStart(2, '0');
+  const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const dMin = new Date(dispMin), dMax = new Date(dispMax);
+  const sameDay = dMin.getUTCFullYear() === dMax.getUTCFullYear()
+               && dMin.getUTCMonth()    === dMax.getUTCMonth()
+               && dMin.getUTCDate()     === dMax.getUTCDate();
+  const fmt = d => sameDay
+    ? `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`
+    : `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
+  const dayTag = sameDay ? ` (${MONTHS[dMin.getUTCMonth()]} ${dMin.getUTCDate()})` : '';
+  el.style.display = '';
+  el.querySelector('.dev-label').textContent = isFiltered ? 'Window' : 'Log Range';
+  const valEl = el.querySelector('.dev-value');
+  valEl.textContent = `${fmt(dMin)} → ${fmt(dMax)}${dayTag} UTC`;
+  valEl.style.color = isFiltered ? 'var(--primary)' : '';
 }
 
 function _histoFrac(e) {
