@@ -2322,8 +2322,8 @@ const ISSUE_PATTERNS = [
       if (med.length)  parts.push(`VPN clients: ${med.map(c => c.vpnLabel).join(', ')}`);
       return parts.join(' · ');
     },
-    desc: 'A VPN or competing security client is installed alongside Netskope. VPN clients can conflict with the Netskope tunnel, causing NPA connectivity failures or double-inspection of traffic. Competing SASE/SWG products (Zscaler, GlobalProtect, Umbrella) create a dual-inspection risk and policy conflicts.',
-    recommend: 'Confirm whether the VPN client is actively in use. If not needed, remove it. If required (e.g. for legacy access), ensure only one tunnel is active at a time and review the Netskope bypass list for VPN-related traffic.',
+    desc: 'A VPN or competing security client is installed alongside Netskope. VPN clients (GlobalProtect, AnyConnect, FortiClient, etc.) typically coexist with Netskope when a steering bypass is configured. Competing SASE/SWG products (Zscaler, Prisma Access, Umbrella) create a dual-inspection risk and are harder to remediate.',
+    recommend: 'For VPN clients: coexistence is usually achievable — configure a Netskope steering bypass for the VPN binary/executable (docs.netskope.com/en/bypass-netskope-from-your-vpn) and review VPN interoperability guidance (docs.netskope.com/en/vpn-applications). For competing SASE/SWG products: confirm whether removal is feasible; both products intercepting traffic simultaneously creates policy conflicts.',
   },
 
   // ── NPA + BWAN issue checks ───────────────────────────────────────────────
@@ -2613,13 +2613,13 @@ function detectAppConflictFindings() {
       category: 'apps',
       icon: '📦',
       source: 'app',
-      title: `${isSase ? 'SASE conflict' : 'VPN conflict'}: ${v.name}${v.version ? ' v' + v.version : ''}`,
+      title: `${isSase ? 'SASE conflict' : 'VPN detected'}: ${v.name}${v.version ? ' v' + v.version : ''}`,
       desc: `Detected as ${v.vpnLabel}.${isSase
         ? ' This is a competing SASE/SWG product that cannot coexist with Netskope Client — one will intercept traffic the other expects to handle.'
-        : ' This VPN client may conflict with the Netskope tunnel, causing packet loss, split-tunneling issues, or connection failures.'}`,
+        : ' This VPN client can coexist with Netskope when properly configured. Issues occur if the VPN performs full-tunnel inspection on port 443 or intercepts traffic before Netskope.'}`,
       recommend: isSase
         ? 'Remove or disable the competing SASE/SWG product. Netskope and products like Zscaler, Prisma Access, or Cisco Umbrella cannot run simultaneously on the same endpoint — both intercept kernel-level traffic.'
-        : 'Disable or remove this VPN client if it is not required. If it must coexist, configure a split-tunnel exclusion or verify that it does not intercept ports 443/UDP-443 used by Netskope.',
+        : 'Coexistence is usually achievable. Configure a Netskope steering bypass for the VPN binary/executable: docs.netskope.com/en/bypass-netskope-from-your-vpn — and review VPN-specific interoperability guidance: docs.netskope.com/en/vpn-applications',
       count: 1,
       examples: [],
       detail: `Found in appInfo.log: ${v.name}`,
@@ -3142,7 +3142,7 @@ const VPN_SIGNATURES = [
   { re: /\bvypr.?vpn\b/i,                     label: 'VyprVPN',                          risk: 'medium' },
   // Enterprise VPNs / secure clients
   { re: /anyconnect|cisco.secure.client/i,    label: 'Cisco AnyConnect / Secure Client', risk: 'medium' },
-  { re: /\bglobalprotect\b/i,                 label: 'Palo Alto GlobalProtect',          risk: 'high'   },
+  { re: /\bglobalprotect\b/i,                 label: 'Palo Alto GlobalProtect',          risk: 'medium' },
   { re: /pulse.secure|ivanti.secure/i,        label: 'Pulse Secure / Ivanti',            risk: 'medium' },
   { re: /forticlient|fortigate.*vpn/i,        label: 'Fortinet FortiClient',             risk: 'medium' },
   { re: /check.?point.*endpoint|endpoint.*check.?point/i, label: 'Check Point Endpoint', risk: 'medium' },
