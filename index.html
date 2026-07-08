@@ -2323,7 +2323,7 @@ const ISSUE_PATTERNS = [
       return parts.join(' · ');
     },
     desc: 'A VPN or competing security client is installed alongside Netskope. VPN clients (GlobalProtect, AnyConnect, FortiClient, etc.) typically coexist with Netskope when a steering bypass is configured. Competing SASE/SWG products (Zscaler, Prisma Access, Umbrella) create a dual-inspection risk and are harder to remediate.',
-    recommend: 'For VPN clients: coexistence is usually achievable — configure a Netskope steering bypass for the VPN binary/executable (docs.netskope.com/en/bypass-netskope-from-your-vpn) and review VPN interoperability guidance (docs.netskope.com/en/vpn-applications). For competing SASE/SWG products: confirm whether removal is feasible; both products intercepting traffic simultaneously creates policy conflicts.',
+    recommend: 'For VPN clients: coexistence is usually achievable — configure a Netskope steering bypass for the VPN binary/executable ([bypass guide](https://docs.netskope.com/en/bypass-netskope-from-your-vpn)) and review VPN interoperability guidance ([VPN interoperability](https://docs.netskope.com/en/vpn-applications)). For competing SASE/SWG products: confirm whether removal is feasible; both products intercepting traffic simultaneously creates policy conflicts.',
   },
 
   // ── NPA + BWAN issue checks ───────────────────────────────────────────────
@@ -2619,7 +2619,7 @@ function detectAppConflictFindings() {
         : ' This VPN client can coexist with Netskope when properly configured. Issues occur if the VPN performs full-tunnel inspection on port 443 or intercepts traffic before Netskope.'}`,
       recommend: isSase
         ? 'Remove or disable the competing SASE/SWG product. Netskope and products like Zscaler, Prisma Access, or Cisco Umbrella cannot run simultaneously on the same endpoint — both intercept kernel-level traffic.'
-        : 'Coexistence is usually achievable. Configure a Netskope steering bypass for the VPN binary/executable: docs.netskope.com/en/bypass-netskope-from-your-vpn — and review VPN-specific interoperability guidance: docs.netskope.com/en/vpn-applications',
+        : 'Coexistence is usually achievable. Configure a Netskope steering bypass for the VPN binary/executable ([bypass guide](https://docs.netskope.com/en/bypass-netskope-from-your-vpn)) and review VPN-specific interoperability guidance ([VPN interoperability](https://docs.netskope.com/en/vpn-applications)).',
       count: 1,
       examples: [],
       detail: `Found in appInfo.log: ${v.name}`,
@@ -2776,6 +2776,12 @@ function renderFindingsGrid(detected) {
   }).join('');
 }
 
+function renderRecommend(text) {
+  if (!text) return '';
+  return esc(text).replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g,
+    (_, label, url) => `<a href="${url}" target="_blank" rel="noopener" style="color:var(--primary);text-decoration:underline">${label}</a>`);
+}
+
 function renderFindingCard(d) {
   const cat       = CATEGORIES[d.category] || { label: d.category, color: '#8b949e' };
   const dismissed = state.dismissedIssues.has(d.id);
@@ -2820,7 +2826,7 @@ function renderFindingCard(d) {
     <div class="fc-details" id="fc-det-${d.id}" style="display:none">
       ${d.detail ? `<div class="fc-detail">📊 ${esc(d.detail)}</div>` : ''}
       ${d.desc    ? `<div class="fc-desc">${esc(d.desc)}</div>` : ''}
-      ${d.recommend ? `<div class="fc-rec">💡 ${esc(d.recommend)}</div>` : ''}
+      ${d.recommend ? `<div class="fc-rec">💡 ${renderRecommend(d.recommend)}</div>` : ''}
       ${hasExamples ? `
         <div style="margin-top:8px">
           <button class="fc-btn" onclick="toggleFindingExamples('${d.id}',this)">
