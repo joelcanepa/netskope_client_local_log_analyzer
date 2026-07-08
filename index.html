@@ -3752,7 +3752,7 @@ function toggleLevel(btn) {
       state.activeLevels.add(level);
     }
   }
-  applyFilters();
+  if (state.globalSearchMode) runGlobalSearch(); else applyFilters();
 }
 
 function toggleLogRegex(btn) {
@@ -3958,7 +3958,11 @@ function _execGlobalSearch() {
     // No query — render all logs merged in time order (capped for performance)
     let index = buildGlobalLogIndex();
     const hf = state.logHistoFilter;
-    if (hf.minMs) index = index.filter(r => { const t = _tsToMs(r.ts); return t && t >= hf.minMs && t <= hf.maxMs; });
+    index = index.filter(r => {
+      if (!state.activeLevels.has(r.level)) return false;
+      if (hf.minMs) { const t = _tsToMs(r.ts); if (!t || t < hf.minMs || t > hf.maxMs) return false; }
+      return true;
+    });
     const MAX_DISPLAY = 5000;
     const rows  = state.logSortDesc ? index.slice(-MAX_DISPLAY).reverse() : index.slice(0, MAX_DISPLAY);
     const total = index.length;
@@ -4000,7 +4004,7 @@ function _execGlobalSearch() {
     return;
   }
 
-  const index = buildGlobalLogIndex();
+  const index = buildGlobalLogIndex().filter(r => state.activeLevels.has(r.level));
   const CTX   = 5;
   const MAX_MATCHES = 200;
 
@@ -4290,7 +4294,7 @@ function buildLogHistogram(allRows) {
                :                     `${Math.round(bucketMs / 3600e3)}h/bar`;
   if (label) label.textContent = `${pts.length.toLocaleString()} rows · ${bLabel}`;
   if (clear) clear.style.display = f.minMs ? '' : 'none';
-  updateBarTimeframe();
+  if (!_histo.dragging) updateBarTimeframe();
 }
 
 function updateBarTimeframe() {
