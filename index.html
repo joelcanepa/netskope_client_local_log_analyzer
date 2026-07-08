@@ -3834,7 +3834,7 @@ function applyFilters() {
   if (state.logSortDesc) state.filteredRows.reverse();
   document.getElementById('log-count-label').textContent =
     `${state.filteredRows.length.toLocaleString()} / ${rows.length.toLocaleString()} lines`;
-  buildLogHistogram(rows);
+  buildLogHistogram(rows.filter(r => state.activeLevels.has(r.level)));
   renderVirtualLog();
 }
 
@@ -3951,8 +3951,8 @@ function _execGlobalSearch() {
   const lbl = document.getElementById('log-count-label');
   if (!el) return;
 
-  // Always build histogram from the full unfiltered global index
-  buildLogHistogram(buildGlobalLogIndex());
+  // Build histogram from level-filtered global index
+  buildLogHistogram(buildGlobalLogIndex().filter(r => state.activeLevels.has(r.level)));
 
   if (!q) {
     // No query — render all logs merged in time order (capped for performance)
@@ -4309,20 +4309,35 @@ function updateBarTimeframe() {
   const isFiltered = hf.minMs > 0;
   const dispMin = isFiltered ? hf.minMs : fullMin;
   const dispMax = isFiltered ? hf.maxMs : fullMax;
-  const p = n => String(n).padStart(2, '0');
+
+  const tz = state.displayTz
+    ? (state.displayTz === 'local' ? Intl.DateTimeFormat().resolvedOptions().timeZone : state.displayTz)
+    : 'UTC';
+  const tzLabel = !state.displayTz ? 'UTC'
+    : state.displayTz === 'local'  ? 'Local'
+    : state.displayTz.split('/').pop().replace(/_/g, ' ');
+
+  const getParts = ms => {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+    }).formatToParts(new Date(ms));
+    const g = t => parts.find(x => x.type === t)?.value || '00';
+    return { yr: +g('year'), mo: +g('month') - 1, dy: +g('day'), h: g('hour'), m: g('minute'), s: g('second') };
+  };
+
   const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  const dMin = new Date(dispMin), dMax = new Date(dispMax);
-  const sameDay = dMin.getUTCFullYear() === dMax.getUTCFullYear()
-               && dMin.getUTCMonth()    === dMax.getUTCMonth()
-               && dMin.getUTCDate()     === dMax.getUTCDate();
-  const fmt = d => sameDay
-    ? `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`
-    : `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
-  const dayTag = sameDay ? ` (${MONTHS[dMin.getUTCMonth()]} ${dMin.getUTCDate()})` : '';
+  const pMin = getParts(dispMin), pMax = getParts(dispMax);
+  const sameDay = pMin.yr === pMax.yr && pMin.mo === pMax.mo && pMin.dy === pMax.dy;
+  const fmt = p => sameDay
+    ? `${p.h}:${p.m}:${p.s}`
+    : `${MONTHS[p.mo]} ${p.dy} ${p.h}:${p.m}`;
+  const dayTag = sameDay ? ` (${MONTHS[pMin.mo]} ${pMin.dy})` : '';
+
   el.style.display = '';
   el.querySelector('.dev-label').textContent = isFiltered ? 'Window' : 'Log Range';
   const valEl = el.querySelector('.dev-value');
-  valEl.textContent = `${fmt(dMin)} → ${fmt(dMax)}${dayTag} UTC`;
+  valEl.textContent = `${fmt(pMin)} → ${fmt(pMax)}${dayTag} ${tzLabel}`;
   valEl.style.color = isFiltered ? 'var(--primary)' : '';
 }
 
@@ -4337,7 +4352,7 @@ function histoMouseMove(e) {
   if (_histo.dragging) {
     _histo.dragF1 = _histoFrac(e);
     const rows = state.globalSearchMode ? buildGlobalLogIndex() : (state.parsedLogs[state.currentFile] || []);
-    buildLogHistogram(rows);
+    buildLogHistogram(rows.filter(r => state.activeLevels.has(r.level)));
   } else {
     histoShowTip(e);
   }
