@@ -1401,6 +1401,21 @@ function processFiles() {
     if (state.files['npaexceptions.json']) {
       try { state.npaExceptions = JSON.parse(state.files['npaexceptions.json']); } catch {}
     }
+    if (state.files['eventcache.json']) {
+      try {
+        const ec = JSON.parse(state.files['eventcache.json']);
+        state.eventcache = ec;
+        const op = ec?.onprem_status || ec?.client_status?.onprem_status;
+        if (op?.status)   state.sysinfo['On-Prem Status'] = String(op.status);
+        if (op?.method)   state.sysinfo['On-Prem Method'] = String(op.method);
+        if (op?.match_ip) state.sysinfo['On-Prem Match IP'] = String(op.match_ip);
+        const profiles = ec?.on_premises_detail || [];
+        const profileNames = profiles.map(p => p.profile_name).filter(Boolean);
+        if (profileNames.length) state.sysinfo['On-Prem Profile'] = profileNames.join(', ');
+        const dc = ec?.device_classification_status || ec?.client_status?.device_classification_status;
+        if (dc && !state.sysinfo['Device Classification']) state.sysinfo['Device Classification'] = String(dc);
+      } catch {}
+    }
     if (state.files['nsdeviceid.json']) {
       try { state.nsdeviceid = JSON.parse(state.files['nsdeviceid.json']); } catch {}
     }
@@ -2022,7 +2037,9 @@ const ISSUE_PATTERNS = [
     match: () => false,
     matchState: s => {
       const dc = s.nsuser?.cache?.DeviceClassificationStatus
-              || s.nsuser?.DeviceClassificationStatus;
+              || s.nsuser?.DeviceClassificationStatus
+              || s.eventcache?.device_classification_status
+              || s.eventcache?.client_status?.device_classification_status;
       if (!dc) return false;
       const val = String(dc).toLowerCase();
       return (val.includes('not configured') || val.includes('unknown') || val === '0' || val === 'none')
@@ -2280,6 +2297,22 @@ const ISSUE_PATTERNS = [
     },
     desc: 'The client configuration allows users to disable Netskope at any time with no restriction. This should be locked down before production rollout.',
     recommend: 'In the Netskope tenant, edit the client configuration and set "Allow Client Disabling" to require an admin password or disable it entirely.',
+    source: 'Dan Colwell — Field Enhancements',
+  },
+  {
+    id: 'client-config-test', category: 'config',
+    title: 'Device Enrolled in Test / Pilot Configuration',
+    severity: 'medium', icon: '🧪',
+    match: () => false,
+    matchState: s => {
+      const name = s.config?.clientConfig?.configurationName
+                ?? s.config?.cache?.clientConfig?.configurationName;
+      if (!name) return false;
+      return /\b(?:test|pilot|poc|staging|demo|sandbox|trial|lab)\b/i.test(name)
+        ? `Configuration name: "${name}"` : false;
+    },
+    desc: 'This device is enrolled in a configuration profile whose name suggests it is part of a test or pilot group. Pilot configs typically have looser controls — client disabling unrestricted, auto-update disabled, bypass rules relaxed — that are not appropriate for production devices.',
+    recommend: 'Confirm whether this device should still be in the test/pilot group. If it is a production device, migrate it to a production configuration profile with appropriate security controls locked down.',
     source: 'Dan Colwell — Field Enhancements',
   },
 
