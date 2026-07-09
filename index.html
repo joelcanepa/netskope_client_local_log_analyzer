@@ -1376,6 +1376,7 @@ function processFiles() {
     if (state.files['nsuserconfig.json']) {
       try {
         const nuc = JSON.parse(state.files['nsuserconfig.json']);
+        state.nsuserconfig = nuc;
         const pu = nuc?.nsUserConfig?.preloginUser || nuc?.preloginUser;
         if (pu) state.sysinfo['Pre-Auth User'] = pu;
         const au = nuc?.nsUserConfig?.autoupdate;
@@ -2282,6 +2283,46 @@ const ISSUE_PATTERNS = [
     source: 'Dan Colwell — Field Enhancements',
   },
 
+  // ── Multi-user / VDI ─────────────────────────────────────────────────────
+  {
+    id: 'multi-user-mode', category: 'config',
+    title: 'Multi-User (Per-User) Mode Detected',
+    severity: 'info', icon: '👥',
+    match: () => false,
+    matchState: s => {
+      const cfg = s.nsuserconfig?.nsUserConfig || s.nsuserconfig;
+      if (!cfg) return false;
+      const enabled = cfg.enablePerUserConfig === true || cfg.enablePerUserConfig === 'true';
+      if (!enabled) return false;
+      return 'enablePerUserConfig = true in nsuserconfig.json';
+    },
+    desc: 'This device runs in per-user (multi-user) mode — each OS user gets their own Netskope enrollment and configuration. Known limitation (NPLAN-112): when a new OS user logs in, nssteeringconfig.json is overwritten with that user\'s policy, replacing the previous user\'s steering config mid-session.',
+    recommend: 'When investigating policy inconsistencies on shared or VDI devices, check whether a different OS user logged in between the incident and log capture. The active steering config reflects the last user to authenticate, not necessarily the affected user.',
+  },
+  {
+    id: 'multi-user-overwrite', category: 'config',
+    title: 'Multi-User Steering Config Overwrite — Multiple Users Detected (ENG-827309)',
+    severity: 'high', icon: '👥',
+    match: () => false,
+    matchState: s => {
+      const cfg = s.nsuserconfig?.nsUserConfig || s.nsuserconfig;
+      if (!cfg) return false;
+      const enabled = cfg.enablePerUserConfig === true || cfg.enablePerUserConfig === 'true';
+      if (!enabled) return false;
+      // Scan all log content for distinct user email addresses
+      const allRaw = Object.values(s.parsedLogs).flat().map(r => r.raw).join('\n');
+      const emails = new Set();
+      for (const m of allRaw.matchAll(/\b([a-z0-9._%+\-]{3,}@[a-z0-9.\-]+\.[a-z]{2,})\b/gi)) {
+        const e = m[1].toLowerCase();
+        if (!e.includes('goskope') && !e.includes('netskope')) emails.add(e);
+      }
+      if (emails.size < 2) return false;
+      return `Per-user mode active — ${emails.size} distinct user identities found in logs: ${[...emails].join(', ')}. nssteeringconfig.json was overwritten each time a new user authenticated.`;
+    },
+    desc: 'Per-user mode is enabled AND multiple distinct user identities were found in the logs, confirming that more than one OS user authenticated during the captured session. Each login overwrites nssteeringconfig.json with the incoming user\'s policy — traffic between sessions may have been steered under the wrong policy. This is the root cause of ENG-827309.',
+    recommend: 'Capture separate log bundles per user session rather than a combined bundle. Ensure the log was collected in the affected user\'s active session. Reference NPLAN-112 when engaging Netskope support.',
+  },
+
   // ── Bypass inventory checks ───────────────────────────────────────────────
   {
     id: 'no-custom-bypass', category: 'config',
@@ -2463,6 +2504,24 @@ const GTF_CHECKS = [
     desc:'FailClose Flow Dropped events mean the Netskope client blocked connections because the tunnel was down and FailClose policy was active. Even a single event means the user experienced a connectivity outage.',
     rx:'Investigate why the tunnel was down — look for preceding tunnel disconnect events. Check if FailClose is appropriate for this user group or if a grace period should be configured.',
     pat:'/FailClosed flow dropped/i' },
+  // ── SSL / Certificate ─────────────────────────────────────────────────────
+  { id:'C-SSL-CERT-MISMATCH', sev:'critical', cat:'tunnel', thr:1, thOp:'>=',
+    title:'SSL Certificate Mismatch — Captive Portal or MITM Detected',
+    desc:'The tunnel SSL handshake was rejected because the server certificate CN does not match the gateway hostname, or certificate verification failed outright. This is the signature of a captive portal or upstream TLS-inspection device intercepting Netskope tunnel traffic. Common in hotel Wi-Fi, guest networks, and some corporate firewalls.',
+    rx:'Have the user open a browser to complete any captive portal login, then reconnect. On corporate networks, ensure gateway*.goskope.com and *.goskope.com are excluded from SSL/TLS inspection policies on the upstream firewall or proxy.',
+    pat:'/cert CN .+ doesn\'t match host name/i | /SSL_connect failed with err[^\\n]*certificate verify failed/i' },
+  // ── Captive Portal ────────────────────────────────────────────────────────
+  { id:'W-CAPTIVE-PORTAL', sev:'warning', cat:'tunnel', thr:1, thOp:'>=',
+    title:'Captive Portal Detection Failed',
+    desc:'The client attempted captive portal detection but could not confirm portal presence. If Fail-Close is also active, the user is blocked from all traffic until portal authentication completes.',
+    rx:'Have the user open a browser and complete any captive portal login before reconnecting. Review captive portal timeout settings in the client configuration and verify enableCaptivePortalDialog is enabled in the tenant.',
+    pat:'/failed to find redirected url for captive portal detection/i | /Captive portal detection failed/i' },
+  // ── Steering Mode ─────────────────────────────────────────────────────────
+  { id:'W-STEERING-NONE', sev:'warning', cat:'tunnel', thr:1, thOp:'>=',
+    title:'On-Prem Detection Disabled All Traffic Steering',
+    desc:'The client detected it is on-premises and switched effective traffic mode to "none", disabling all steering. If unexpected, the on-prem detection config may be too broad or the egress IP probe is returning a false positive for users who are actually off-prem.',
+    rx:'Review on-prem detection settings in the Netskope tenant. Verify egress IP ranges are accurate and specific. If this device should be steered even on-prem, disable on-prem detection in the assigned client configuration profile.',
+    pat:'/Effective traffic mode changed[^\\n]*none:\\d+->[1-9]/i' },
   { id:'C-TAMPER', sev:'critical', cat:'config', thr:1, thOp:'>=',
     title:'Configuration tampering detected',
     desc:'The Netskope client found its cached exception or bypass list had been modified against its signature. Could indicate a security incident where bypass rules were altered.',
