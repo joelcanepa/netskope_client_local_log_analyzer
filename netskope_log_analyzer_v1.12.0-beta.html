@@ -2077,7 +2077,7 @@ const ISSUE_PATTERNS = [
   {
     id: 'epdlp-bypass-active', category: 'epdlp',
     title: 'EPDLP Permanently Bypassed — One-Time Disable Password Active',
-    severity: 'critical', icon: '🔓',
+    severity: 'high', icon: '🔓',
     match: () => false,
     matchState: s => {
       if (!s.epdlp?.bypassActive) return false;
@@ -2125,7 +2125,7 @@ const ISSUE_PATTERNS = [
   {
     id: 'epdlp-crash-loop', category: 'epdlp',
     title: 'EPDLP Process Crash / Restart Loop',
-    severity: 'critical', icon: '💥',
+    severity: 'high', icon: '💥',
     match: () => false,
     matchState: s => {
       const errLog = s.files?.['epdlp_err'] || '';
@@ -2159,7 +2159,7 @@ const ISSUE_PATTERNS = [
   {
     id: 'epdlp-mp-gateway-fail', category: 'epdlp',
     title: 'EPDLP Management Plane Gateway Unreachable',
-    severity: 'critical', icon: '🌐',
+    severity: 'high', icon: '🌐',
     match: () => false,
     matchState: s => {
       const rows = Object.entries(s.parsedLogs)
@@ -2177,7 +2177,7 @@ const ISSUE_PATTERNS = [
   {
     id: 'epdlp-policy-parse-fail', category: 'epdlp',
     title: 'EPDLP Policy Parse Failure — Policy Not Enforced',
-    severity: 'critical', icon: '📄',
+    severity: 'high', icon: '📄',
     match: () => false,
     matchState: s => {
       const rows = Object.entries(s.parsedLogs).filter(([k]) => k.startsWith('epdlp_')).flatMap(([,r]) => r);
@@ -2198,7 +2198,7 @@ const ISSUE_PATTERNS = [
   {
     id: 'epdlp-gslb-fail', category: 'epdlp',
     title: 'EPDLP GSLB Resolution Failure — Cannot Discover Data Plane',
-    severity: 'critical', icon: '🌐',
+    severity: 'high', icon: '🌐',
     match: () => false,
     matchState: s => {
       const rows = Object.entries(s.parsedLogs).filter(([k]) => k.startsWith('epdlp_')).flatMap(([,r]) => r);
@@ -2245,7 +2245,7 @@ const ISSUE_PATTERNS = [
   {
     id: 'epdlp-wmi-corrupt', category: 'epdlp',
     title: 'WMI Repository Corruption — USB Device Control Broken',
-    severity: 'critical', icon: '💾',
+    severity: 'high', icon: '💾',
     match: () => false,
     matchState: s => {
       const rows = Object.entries(s.parsedLogs).filter(([k]) => k.startsWith('epdlp_')).flatMap(([,r]) => r);
@@ -2259,7 +2259,7 @@ const ISSUE_PATTERNS = [
   {
     id: 'epdlp-driver-missing', category: 'epdlp',
     title: 'EPDLP Driver File Missing After Upgrade',
-    severity: 'critical', icon: '🗂️',
+    severity: 'high', icon: '🗂️',
     match: () => false,
     matchState: s => {
       const errLog = s.files?.['epdlp_err'] || '';
