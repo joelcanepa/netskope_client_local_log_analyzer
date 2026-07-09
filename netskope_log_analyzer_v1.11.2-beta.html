@@ -940,7 +940,7 @@ body {
 
 <script>
 // ─── Version ─────────────────────────────────────────────────────────────────
-const TOOL_VERSION = '1.11.2-beta';
+const TOOL_VERSION = '1.11.2';
 
 // ─── State ────────────────────────────────────────────────────────────────────
 const state = {
@@ -4347,12 +4347,13 @@ function _histoFrac(e) {
 }
 function histoMouseDown(e) {
   _histo.dragging = true; _histo.dragF0 = _histoFrac(e); _histo.dragF1 = _histo.dragF0;
+  const rawRows = state.globalSearchMode ? buildGlobalLogIndex() : (state.parsedLogs[state.currentFile] || []);
+  _histo.dragRows = rawRows.filter(r => state.activeLevels.has(r.level));
 }
 function histoMouseMove(e) {
   if (_histo.dragging) {
     _histo.dragF1 = _histoFrac(e);
-    const rows = state.globalSearchMode ? buildGlobalLogIndex() : (state.parsedLogs[state.currentFile] || []);
-    buildLogHistogram(rows.filter(r => state.activeLevels.has(r.level)));
+    buildLogHistogram(_histo.dragRows);
   } else {
     histoShowTip(e);
   }
@@ -4378,8 +4379,7 @@ function histoMouseLeave(e) {
   histoHideTip();
   if (!_histo.dragging) return;
   _histo.dragging = false;
-  const rows = state.globalSearchMode ? buildGlobalLogIndex() : (state.parsedLogs[state.currentFile] || []);
-  buildLogHistogram(rows);
+  buildLogHistogram(_histo.dragRows || []);
 }
 function histoShowTip(e) {
   const tip = document.getElementById('log-histo-tip');
