@@ -940,7 +940,7 @@ body {
 
 <script>
 // ─── Version ─────────────────────────────────────────────────────────────────
-const TOOL_VERSION = '1.12.0';
+const TOOL_VERSION = '1.12.1';
 
 // ─── State ────────────────────────────────────────────────────────────────────
 const state = {
@@ -3157,7 +3157,7 @@ function detectFindings() {
   // App conflict findings from installed applications
   detected.push(...detectAppConflictFindings());
 
-  const sevOrder = { high: 0, medium: 1, low: 2, info: 3 };
+  const sevOrder = { high: 0, medium: 1, warning: 2, low: 3, info: 4 };
   const catOrder = { tunnel: 0, config: 1, npa: 2, driver: 3, auth: 4, ui: 5, noise: 6, sdwan: 7, gslb: 8, epdlp: 9 };
   detected.sort((a, b) => {
     const sd = sevOrder[a.severity] - sevOrder[b.severity];
@@ -3196,14 +3196,14 @@ function renderFindings() {
       style="background:${c.color}18;color:${c.color};border-color:${c.color}44">${c.label} ${n}</button>`;
   }).join('');
 
-  const sevSummary = ['high','medium','info'].map(s => {
+  const sevSummary = ['high','medium','warning','low','info'].map(s => {
     const n = detected.filter(d => d.severity === s).length;
     if (!n) return '';
-    const c = s === 'high' ? 'var(--error)' : s === 'medium' ? 'var(--warning)' : 'var(--muted)';
-    return `<span style="color:${c};font-weight:600;font-size:12px">${n} ${s}</span>`;
+    const meta = SEV_META[s];
+    return `<span style="color:${meta.color};font-weight:600;font-size:12px">${n} ${s}</span>`;
   }).filter(Boolean).join('<span style="color:var(--muted);margin:0 4px">·</span>');
 
-  const sevButtons = ['high','medium','info'].filter(s => detected.some(d => d.severity === s)).map(s => {
+  const sevButtons = ['high','medium','warning','low','info'].filter(s => detected.some(d => d.severity === s)).map(s => {
     const meta = SEV_META[s];
     return `<button class="fl-fbtn" data-s="${s}" id="findings-sev-${s}"
       onclick="findingsSevFilter('${s}',this)"
@@ -3246,10 +3246,11 @@ function renderFindings() {
 }
 
 const SEV_META = {
-  high:   { label: 'High Severity',   color: 'var(--error)',   dot: '🔴' },
-  medium: { label: 'Medium Severity', color: 'var(--warning)', dot: '🟡' },
-  low:    { label: 'Low Severity',    color: 'var(--debug)',   dot: '🔵' },
-  info:   { label: 'Informational',   color: 'var(--primary)', dot: 'ℹ️' },
+  high:    { label: 'High Severity',   color: 'var(--error)',   dot: '🔴' },
+  medium:  { label: 'Medium Severity', color: 'var(--warning)', dot: '🟡' },
+  warning: { label: 'Warning',         color: '#e8914e',        dot: '🟠' },
+  low:     { label: 'Low Severity',    color: 'var(--debug)',   dot: '🔵' },
+  info:    { label: 'Informational',   color: 'var(--primary)', dot: 'ℹ️' },
 };
 
 function renderSeverityDivider(sev, count) {
@@ -5420,7 +5421,7 @@ function exportReport() {
         examples: matches.slice(0,3).map(r => r.raw) });
     }
   }
-  const sevOrder = { high: 0, medium: 1, low: 2, info: 3 };
+  const sevOrder = { high: 0, medium: 1, warning: 2, low: 3, info: 4 };
   detected.sort((a,b) => sevOrder[a.severity] - sevOrder[b.severity]);
 
   if (!detected.length) {
