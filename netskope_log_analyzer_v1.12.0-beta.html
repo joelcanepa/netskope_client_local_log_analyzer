@@ -2075,7 +2075,7 @@ const ISSUE_PATTERNS = [
 
   // ── EPDLP findings (from epdlp-diagnostics.zip) ──────────────────────────
   {
-    id: 'epdlp-bypass-active', category: 'config',
+    id: 'epdlp-bypass-active', category: 'epdlp',
     title: 'EPDLP Permanently Bypassed — One-Time Disable Password Active',
     severity: 'critical', icon: '🔓',
     match: () => false,
@@ -2088,7 +2088,7 @@ const ISSUE_PATTERNS = [
     source: 'EPDLP diagnostics — nsepdlpconfig.json',
   },
   {
-    id: 'epdlp-cert-missing', category: 'tunnel',
+    id: 'epdlp-cert-missing', category: 'epdlp',
     title: 'EPDLP Offline — Client Certificates Missing',
     severity: 'high', icon: '🔐',
     match: () => false,
@@ -2105,7 +2105,7 @@ const ISSUE_PATTERNS = [
     source: 'EPDLP diagnostics — epdlp_sys_log',
   },
   {
-    id: 'epdlp-policy-not-loaded', category: 'config',
+    id: 'epdlp-policy-not-loaded', category: 'epdlp',
     title: 'EPDLP Cannot Evaluate — No Policy Loaded',
     severity: 'high', icon: '📋',
     match: () => false,
@@ -2123,7 +2123,7 @@ const ISSUE_PATTERNS = [
     source: 'EPDLP diagnostics — epdlp_sys_log',
   },
   {
-    id: 'epdlp-crash-loop', category: 'tunnel',
+    id: 'epdlp-crash-loop', category: 'epdlp',
     title: 'EPDLP Process Crash / Restart Loop',
     severity: 'critical', icon: '💥',
     match: () => false,
@@ -2139,7 +2139,7 @@ const ISSUE_PATTERNS = [
     source: 'EPDLP diagnostics — epdlp.err.log',
   },
   {
-    id: 'epdlp-dp-gateway-fail', category: 'tunnel',
+    id: 'epdlp-dp-gateway-fail', category: 'epdlp',
     title: 'EPDLP Data Plane Gateway Unreachable',
     severity: 'warning', icon: '🌐',
     match: () => false,
@@ -2157,7 +2157,7 @@ const ISSUE_PATTERNS = [
     source: 'EPDLP diagnostics — epdlp_sys_log',
   },
   {
-    id: 'epdlp-mp-gateway-fail', category: 'tunnel',
+    id: 'epdlp-mp-gateway-fail', category: 'epdlp',
     title: 'EPDLP Management Plane Gateway Unreachable',
     severity: 'critical', icon: '🌐',
     match: () => false,
@@ -2173,6 +2173,173 @@ const ISSUE_PATTERNS = [
     desc: 'EPDLP failed to reach the management plane gateway (mp-gateway) used for policy sync, device status, and health reporting. Without MP connectivity, EPDLP runs on a stale policy and cannot receive policy updates or report its health state.',
     recommend: 'Verify that mp-gateway-*.epdlp.goskope.com is reachable. Check for TLS certificate errors (mTLS is required). If a proxy sits in the path, verify it is not intercepting EPDLP traffic — EPDLP uses mutual TLS with tenant-issued certs that a proxy cannot re-sign.',
     source: 'EPDLP diagnostics — epdlp_sys_log',
+  },
+  {
+    id: 'epdlp-policy-parse-fail', category: 'epdlp',
+    title: 'EPDLP Policy Parse Failure — Policy Not Enforced',
+    severity: 'critical', icon: '📄',
+    match: () => false,
+    matchState: s => {
+      const rows = Object.entries(s.parsedLogs).filter(([k]) => k.startsWith('epdlp_')).flatMap(([,r]) => r);
+      const hits = rows.filter(r =>
+        r.msg.includes('failed basic JSON validation') ||
+        r.msg.includes('Rule: failed to load') ||
+        r.msg.includes('Policy: failed to load') ||
+        r.msg.includes('Error parsing policy file') ||
+        r.msg.includes('failed to parse policy') ||
+        r.msg.includes('policy parse error')
+      );
+      return hits.length ? `${hits.length} policy parse error(s) — EPDLP loaded a corrupt or incompatible policy and is not enforcing DLP rules. First error: "${hits[0].msg.slice(0,120)}"` : false;
+    },
+    desc: 'The EPDLP policy file failed JSON validation or rule-level parsing. When this occurs, EPDLP cannot enforce any rules and falls back to the configured error-fallback action (block or allow). This typically results from a truncated policy download, schema mismatch after an upgrade, or storage corruption.',
+    recommend: 'Force a policy re-download by clearing the policy cache directory (policy/<fingerprint>/) and restarting the EPDLP service. If the issue persists after re-download, open a case with Netskope support and attach the epdlp-diagnostics.zip.',
+    source: 'Troubleshooting EPDLP Agent Issues',
+  },
+  {
+    id: 'epdlp-gslb-fail', category: 'epdlp',
+    title: 'EPDLP GSLB Resolution Failure — Cannot Discover Data Plane',
+    severity: 'critical', icon: '🌐',
+    match: () => false,
+    matchState: s => {
+      const rows = Object.entries(s.parsedLogs).filter(([k]) => k.startsWith('epdlp_')).flatMap(([,r]) => r);
+      const hits = rows.filter(r =>
+        (r.msg.includes('epdlp.gslb.goskope.com') || r.msg.includes('gslb') && r.msg.includes('epdlp')) &&
+        (r.level === 'error' || r.level === 'warning' || r.msg.toLowerCase().includes('fail') || r.msg.toLowerCase().includes('unreachable'))
+      );
+      return hits.length ? `${hits.length} GSLB resolution failure(s) — EPDLP cannot discover data plane endpoints. Content scanning will fall back to local-only mode.` : false;
+    },
+    desc: 'EPDLP could not resolve or reach its GSLB endpoint (epdlp.gslb.goskope.com), which is used to discover the nearest data plane gateway for content scanning. Without this, EPDLP cannot identify which dp-gateway to send scan results to.',
+    recommend: 'Verify DNS resolution of epdlp.gslb.goskope.com from this device. Check for split-DNS or firewall rules blocking port 443 to Netskope GSLB endpoints. If the NS client tunnel is up, ensure the EPDLP traffic is not excluded from steering.',
+    source: 'Troubleshooting Agent Communication Problems',
+  },
+  {
+    id: 'epdlp-offline-state', category: 'epdlp',
+    title: 'EPDLP Entered Offline Mode',
+    severity: 'warning', icon: '📴',
+    match: () => false,
+    matchState: s => {
+      const rows = Object.entries(s.parsedLogs).filter(([k]) => k.startsWith('epdlp_')).flatMap(([,r]) => r);
+      const hits = rows.filter(r => r.msg.includes('Enabled offline state') || r.msg.includes('offline state'));
+      return hits.length ? `EPDLP entered offline mode ${hits.length} time(s). During offline periods the configured offline-fallback action (${s.epdlp?.offlineFallback || 'unknown'}) was applied to all file events.` : false;
+    },
+    desc: 'EPDLP detected that it cannot reach the Netskope gateway and switched to offline mode. In offline mode, no content scanning results are sent and all file control decisions use the offline-fallback action configured in the policy (block, allow, or allow-for-large-files).',
+    recommend: 'Check network connectivity to the Netskope gateway. Review whether a VPN or firewall policy change preceded the offline transition. Check the epdlp_sys_log around the offline event for the specific failure (certificate, DNS, or TCP connection).',
+    source: 'Endpoint DLP (eDLP)',
+  },
+  {
+    id: 'epdlp-verifier-reject', category: 'epdlp',
+    title: 'EPDLP Library Verifier Rejection',
+    severity: 'warning', icon: '🔏',
+    match: () => false,
+    matchState: s => {
+      const rows = Object.entries(s.parsedLogs).filter(([k]) => k.startsWith('epdlp_')).flatMap(([,r]) => r);
+      const hits = rows.filter(r => r.msg.includes('verifier failed to load') || r.msg.includes('library verification failed') || r.msg.includes('failed library verification'));
+      if (!hits.length) return false;
+      const libs = hits.map(r => { const m = r.msg.match(/['"]([\w./\\-]+\.dll)/i); return m ? m[1] : null; }).filter(Boolean);
+      return `${hits.length} library verifier rejection(s)${libs.length ? ` — rejected: ${[...new Set(libs)].join(', ')}` : ''}. Only Netskope, Microsoft, and McAfee-signed DLLs are allowed in EPDLP process space.`;
+    },
+    desc: 'The EPDLP library verifier rejected one or more DLLs loaded into the EPDLP process. EPDLP enforces a strict allowlist — only libraries signed by Netskope, Microsoft, or McAfee are permitted. A rejected library may indicate a third-party security product injecting into EPDLP, which can cause crashes or policy bypass.',
+    recommend: 'Identify the rejected library and determine which product loaded it. Common culprits: EDR agents, AV products, or custom enterprise software using DLL injection. Contact the vendor of the injecting product to exclude EPDLP processes, or engage Netskope support to evaluate an allowlist exception.',
+    source: 'Netskope Endpoint DLP Agent Troubleshooting',
+  },
+  {
+    id: 'epdlp-wmi-corrupt', category: 'epdlp',
+    title: 'WMI Repository Corruption — USB Device Control Broken',
+    severity: 'critical', icon: '💾',
+    match: () => false,
+    matchState: s => {
+      const rows = Object.entries(s.parsedLogs).filter(([k]) => k.startsWith('epdlp_')).flatMap(([,r]) => r);
+      const hits = rows.filter(r => r.msg.includes('IEnumWbemClassObject.Next failed') || r.msg.includes('-2147217392'));
+      return hits.length ? `WMI enumeration failure (error -2147217392) detected ${hits.length} time(s) — USB device detection is broken and Device Control cannot enforce policies on removable media.` : false;
+    },
+    desc: 'EPDLP failed to enumerate USB devices via WMI due to repository corruption (WBEM_E_NOT_FOUND, error -2147217392). This completely breaks USB Device Control — EPDLP cannot detect plugged-in USB storage devices and will not apply block/read-only policies to them.',
+    recommend: 'Rebuild the WMI repository: run "winmgmt /resetrepository" from an elevated command prompt, then restart the Windows Management Instrumentation service and the EPDLP service. If the issue persists, use "winmgmt /verifyrepository" to diagnose further.',
+    source: 'Troubleshooting EPDLP Agent Issues (≤R119)',
+  },
+  {
+    id: 'epdlp-driver-missing', category: 'epdlp',
+    title: 'EPDLP Driver File Missing After Upgrade',
+    severity: 'critical', icon: '🗂️',
+    match: () => false,
+    matchState: s => {
+      const errLog = s.files?.['epdlp_err'] || '';
+      const rows = Object.entries(s.parsedLogs).filter(([k]) => k.startsWith('epdlp_')).flatMap(([,r]) => r);
+      const hits = rows.filter(r =>
+        r.msg.includes('epdlpdrv.sys') ||
+        r.msg.includes('GLE=1075') ||
+        r.msg.includes('circular dependency') ||
+        r.msg.includes('driver not found')
+      );
+      const errHit = errLog.includes('epdlpdrv') || errLog.includes('GLE=1075');
+      return (hits.length || errHit) ? 'EPDLP kernel driver (epdlpdrv.sys) is missing or failed to start (GLE=1075 / circular dependency). EPDLP content control and USB file scanning are completely non-functional.' : false;
+    },
+    desc: 'The EPDLP kernel-mode filter driver (epdlpdrv.sys) is missing or failed to register, typically after a patch upgrade that did not cleanly replace the driver binary. The service cannot start due to a circular dependency error (GLE=1075). This is a known pattern from field escalations.',
+    recommend: 'Reinstall the EPDLP component using the Netskope client installer. If reinstall fails, manually remove the driver service entry ("sc delete epdlpdrv"), reboot, then reinstall. Engage Netskope support if the driver file is missing from the installation directory.',
+    source: 'Field escalation pattern (IDFC)',
+  },
+  {
+    id: 'epdlp-content-ctrl-missing', category: 'epdlp',
+    title: 'EPDLP Content Control Not Initialized',
+    severity: 'warning', icon: '📂',
+    match: () => false,
+    matchState: s => {
+      const rows = Object.entries(s.parsedLogs).filter(([k]) => k.startsWith('epdlp_')).flatMap(([,r]) => r);
+      if (rows.length < 200) return false; // need enough log to be meaningful
+      const hasCC = rows.some(r => r.msg.includes('ContentCtrlManager') || r.msg.includes('FilterListener: worker starting'));
+      return hasCC ? false : `No ContentCtrlManager or FilterListener initialization found in ${rows.length.toLocaleString()} EPDLP log lines. USB and file content control may be running in passthrough mode.`;
+    },
+    desc: 'The EPDLP content control subsystem (ContentCtrlManager / FilterListener) never initialized in the captured log window. This means USB file scanning and content-based DLP policies are not being enforced — file copies to USB go through without scanning.',
+    recommend: 'Check whether the EPDLP kernel extension / filter driver is approved and loaded. On macOS, verify the system extension is approved in System Settings → Privacy & Security. On Windows, check that epdlpdrv.sys is running. Reinstall the EPDLP component if the driver is missing.',
+    source: 'Troubleshooting EPDLP Agent Issues',
+  },
+  {
+    id: 'epdlp-dlp-blocks', category: 'epdlp',
+    title: 'EPDLP DLP Block Events Detected',
+    severity: 'info', icon: '🚫',
+    match: () => false,
+    matchState: s => {
+      const rows = Object.entries(s.parsedLogs).filter(([k]) => k.startsWith('epdlp_')).flatMap(([,r]) => r);
+      const blocks = rows.filter(r => /result "match" with action "(?:block|readonly)"/.test(r.msg));
+      if (!blocks.length) return false;
+      const rules = new Map();
+      for (const r of blocks) {
+        const m = r.msg.match(/for rule "([^"]+)"/);
+        if (m) rules.set(m[1], (rules.get(m[1]) || 0) + 1);
+      }
+      const ruleList = [...rules.entries()].sort((a,b) => b[1]-a[1]).slice(0,5).map(([r,n]) => `"${r}" (${n}×)`).join(', ');
+      return `${blocks.length} DLP block/readonly event(s) in EPDLP logs. Top rules: ${ruleList || 'unknown'}`;
+    },
+    desc: 'EPDLP matched and blocked (or set to read-only) one or more file transfer events. This is the system working as intended — surfaced here for visibility during incident investigation. The rule names identify which DLP policy triggered.',
+    recommend: 'If this is unexpected, review the matching DLP policy in the Netskope tenant and verify the rule logic. Check the EPDLP incident report in the tenant console for the full DLP incident details including file content matches.',
+    source: 'Community KB',
+  },
+  {
+    id: 'epdlp-crowdstrike-conflict', category: 'epdlp',
+    title: 'CrowdStrike Extended User Mode Conflict Detected',
+    severity: 'warning', icon: '⚔️',
+    match: () => false,
+    matchState: s => {
+      const rows = Object.entries(s.parsedLogs).filter(([k]) => k.startsWith('epdlp_')).flatMap(([,r]) => r);
+      const hits = rows.filter(r => /CsXumd64_/i.test(r.msg) || r.msg.includes('CrowdStrike') && r.msg.includes('dll'));
+      return hits.length ? `CrowdStrike Extended User Mode DLL (CsXumd64_*.dll) detected in EPDLP process space (${hits.length} reference(s)). This can cause crashes or hangs in UWP applications on Windows 11.` : false;
+    },
+    desc: 'CrowdStrike Falcon\'s Extended User Mode data collection is injecting its DLL into EPDLP-monitored processes. On Windows 11, this combination is known to cause crashes and hangs in UWP (Universal Windows Platform) applications when EPDLP content control is active.',
+    recommend: 'Configure CrowdStrike Falcon to exclude the EPDLP process (Netskope Endpoint DLP.exe / epdlp.exe) from Extended User Mode injection. Work with your CrowdStrike administrator to add the exclusion. Alternatively, engage Netskope support — this is a known interop issue with a documented resolution path.',
+    source: 'Interop Troubleshooting',
+  },
+  {
+    id: 'epdlp-boot-fail', category: 'epdlp',
+    title: 'EPDLP Boot-Out Failure',
+    severity: 'high', icon: '🥾',
+    match: () => false,
+    matchState: s => {
+      const errLog = s.files?.['epdlp_err'] || '';
+      const hits = (errLog.match(/Boot-out failed/g) || []).length;
+      return hits ? `"Boot-out failed" detected ${hits} time(s) in epdlp.err.log. EPDLP could not cleanly unload its kernel extension or filter driver on shutdown/restart.` : false;
+    },
+    desc: 'EPDLP failed to unload ("boot out") its kernel components on process shutdown or service restart. This can leave kernel hooks in an inconsistent state and may require a full system reboot to clear. Repeated boot-out failures indicate a driver stability issue.',
+    recommend: 'Reboot the endpoint to ensure a clean kernel state. If boot-out failures persist across reboots, reinstall the EPDLP component. Check for conflicts with other kernel extensions or filter drivers (run "fltmc" on Windows to list active minifilters).',
+    source: 'EPDLP diagnostics — epdlp.err.log',
   },
 
   // ── INFORMATIONAL / BENIGN NOISE ──────────────────────────────────────────
@@ -2738,6 +2905,7 @@ const CATEGORIES = {
   sdwan:  { label: 'SD-WAN', color: '#f0883e' },
   gslb:   { label: 'GSLB',   color: '#a371f7' },
   apps:   { label: 'Apps',   color: '#ff7b72' },
+  epdlp:  { label: 'EPDLP',  color: '#e8614e' },
 };
 
 // ── GTF Check Engine (beta) ───────────────────────────────────────────────────
@@ -2990,7 +3158,7 @@ function detectFindings() {
   detected.push(...detectAppConflictFindings());
 
   const sevOrder = { high: 0, medium: 1, low: 2, info: 3 };
-  const catOrder = { tunnel: 0, config: 1, npa: 2, driver: 3, auth: 4, ui: 5, noise: 6, sdwan: 7, gslb: 8 };
+  const catOrder = { tunnel: 0, config: 1, npa: 2, driver: 3, auth: 4, ui: 5, noise: 6, sdwan: 7, gslb: 8, epdlp: 9 };
   detected.sort((a, b) => {
     const sd = sevOrder[a.severity] - sevOrder[b.severity];
     return sd !== 0 ? sd : (catOrder[a.category] || 9) - (catOrder[b.category] || 9);
