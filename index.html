@@ -2510,6 +2510,16 @@ const GTF_CHECKS = [
     desc:'The tunnel SSL handshake was rejected because the server certificate CN does not match the gateway hostname, or certificate verification failed outright. This is the signature of a captive portal or upstream TLS-inspection device intercepting Netskope tunnel traffic. Common in hotel Wi-Fi, guest networks, and some corporate firewalls.',
     rx:'Have the user open a browser to complete any captive portal login, then reconnect. On corporate networks, ensure gateway*.goskope.com and *.goskope.com are excluded from SSL/TLS inspection policies on the upstream firewall or proxy.',
     pat:'/cert CN .+ doesn\'t match host name/i | /SSL_connect failed with err[^\\n]*certificate verify failed/i' },
+  { id:'C-NPA-SSL-INSPECT', sev:'critical', cat:'npa', thr:1, thOp:'>=',
+    title:'NPA Gateway SSL Inspection — Self-Signed Cert in Chain',
+    desc:'The NPA gateway TLS handshake failed because an upstream device injected a self-signed certificate into the chain. A firewall or proxy is performing TLS inspection on NPA broker traffic, breaking the NPA tunnel. Unlike SWG traffic, NPA gateway connections cannot tolerate SSL inspection — the broker uses certificate pinning.',
+    rx:'Exempt NPA gateway IP ranges and *.goskope.com from SSL/TLS decryption on the upstream firewall or proxy. NPA broker traffic must be excluded from deep packet inspection.',
+    pat:'/self signed certificate in certificate chain/i | /Error verifying certificate[^\\n]*self.signed/i' },
+  { id:'C-TENANT-CERT-EXPIRED', sev:'critical', cat:'config', thr:1, thOp:'>=',
+    title:'Tenant Signing Certificate Expired',
+    desc:'The Netskope tenant signing certificate has expired. The client cannot establish a secure connection to the tenant — enrollment, policy updates, and tunnel establishment all fail until the certificate is renewed.',
+    rx:'Log into the Netskope admin console and navigate to Settings → Manage → Certificates → Signing CA. Activate the renewed certificate. If no renewed cert is available, contact Netskope support immediately — this is a tenant-level outage.',
+    pat:'/Cert Chain verification failed[^\\n]*certificate has expired/i | /sign\\.cpp[^\\n]*certificate has expired/i | /signing cert[^\\n]*expired/i' },
   // ── Captive Portal ────────────────────────────────────────────────────────
   { id:'W-CAPTIVE-PORTAL', sev:'warning', cat:'tunnel', thr:1, thOp:'>=',
     title:'Captive Portal Detection Failed',
@@ -2606,6 +2616,18 @@ const GTF_CHECKS = [
     desc:'Failed posture checks cause the device to be classified as unmanaged, potentially changing policy enforcement. Users experience this as unexplained access denials.',
     rx:'Review Settings → Security Posture in the Netskope console. Enable BitLocker (Windows) or FileVault (macOS) for disk encryption failures.',
     pat:'/\\w+ check: name \\w+, status 0/i' },
+  // ── Auth / Identity ───────────────────────────────────────────────────────
+  { id:'W-USER-MISMATCH', sev:'warning', cat:'auth', thr:1, thOp:'>=',
+    title:'User Identity Mismatch — Enrolled User Differs from Active User',
+    desc:'The Netskope client detected that the currently logged-in OS user does not match the user identity that was used during enrollment. This is the #1 cause of silent enrollment failures — the user account exists in Netskope but the UPN or email does not match the enrolled identity, so policy is applied to the wrong user or not at all.',
+    rx:'Confirm the user\'s UPN in Active Directory or IdP matches exactly what is configured in Netskope (case-sensitive). Re-enroll the client under the correct user identity. If SCIM provisioning is in use, verify the email attribute sync is correct.',
+    pat:'/[Tt]he current user detected by the client doesn\'t match/i | /[Uu]ser.*mismatch.*enrolled/i | /[Ee]nrolled.*user.*(?:does not|doesn\'t|!=).*(?:current|active|logged)/i | /[Uu]ser identity mismatch/i' },
+  // ── NPA Enrollment ────────────────────────────────────────────────────────
+  { id:'W-NPA-REG-FAIL', sev:'warning', cat:'npa', thr:1, thOp:'>=',
+    title:'NPA Client Registration / Enrollment Failure',
+    desc:'The NPA client handler stopped or failed to register — distinct from an NPA broker being unreachable. This is the client\'s own enrollment process failing, typically due to an expired NPA token, a failed discovery call to the NPA service, or a stale client handler state.',
+    rx:'Re-enroll the NPA client from the Netskope console (Users → select user → Re-enroll NPA). If the discovery call failed, verify connectivity to the NPA enrollment endpoint. Check whether the NPA token has expired and issue a new one.',
+    pat:'/ClientHandler stopped/i | /[Rr]egistration failed.*discovery call/i | /NPA.*registration.*failed/i | /npaClientHandler.*stopped/i' },
 ];
 
 // Parse a GTF logPattern string ("/pat/flags" or "/p1/flags | /p2/flags") into a testable object.
