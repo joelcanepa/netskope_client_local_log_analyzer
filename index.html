@@ -940,7 +940,7 @@ body {
 
 <script>
 // ─── Version ─────────────────────────────────────────────────────────────────
-const TOOL_VERSION = '1.12.1';
+const TOOL_VERSION = '1.12.2';
 
 // ─── State ────────────────────────────────────────────────────────────────────
 const state = {
@@ -2340,6 +2340,333 @@ const ISSUE_PATTERNS = [
     desc: 'EPDLP failed to unload ("boot out") its kernel components on process shutdown or service restart. This can leave kernel hooks in an inconsistent state and may require a full system reboot to clear. Repeated boot-out failures indicate a driver stability issue.',
     recommend: 'Reboot the endpoint to ensure a clean kernel state. If boot-out failures persist across reboots, reinstall the EPDLP component. Check for conflicts with other kernel extensions or filter drivers (run "fltmc" on Windows to list active minifilters).',
     source: 'EPDLP diagnostics — epdlp.err.log',
+  },
+
+  {
+    id: 'epdlp-service-stopped', category: 'epdlp',
+    title: 'EPDLP Service Not Running',
+    severity: 'high', icon: '🛑',
+    match: () => false,
+    matchState: s => {
+      if (!s.epdlp) return false;
+      const statusRaw = s.files?.['epdlp_status.json'] || '';
+      const rows = Object.entries(s.parsedLogs).filter(([k]) => k.startsWith('epdlp_')).flatMap(([,r]) => r);
+      const stoppedStatus = /"(?:deviceStatus|agentStatus)"\s*:\s*"(?:stopped|not running|inactive|disabled)"/i.test(statusRaw);
+      const noLog = rows.length < 3 && statusRaw;
+      if (!stoppedStatus && !noLog) return false;
+      return stoppedStatus
+        ? 'EPDLP status.json reports a non-running service state — DLP enforcement is inactive on this endpoint.'
+        : 'EPDLP diagnostics package present but sys log has fewer than 3 entries — service may not be running.';
+    },
+    desc: 'EPDLP is installed but the service appears to be stopped. This leaves the endpoint with no DLP enforcement — files can be copied to USB, printers, or network shares without any DLP scanning.',
+    recommend: 'Start the EPDLP service from Services.msc or via "net start epdlp". If the service fails to start, check Windows Event Log for service control manager errors and epdlp.err.log for initialization failures. A reinstall of the EPDLP component may be required.',
+    source: 'Troubleshooting EPDLP Agent Issues',
+  },
+  {
+    id: 'epdlp-stuck-disabled', category: 'epdlp',
+    title: 'EPDLP Stuck Disabled Past Re-Enable Timeout',
+    severity: 'warning', icon: '⏰',
+    match: () => false,
+    matchState: s => {
+      const rows = Object.entries(s.parsedLogs).filter(([k]) => k.startsWith('epdlp_')).flatMap(([,r]) => r);
+      const hits = rows.filter(r =>
+        r.msg.includes('disable timeout') ||
+        r.msg.includes('stuck disabled') ||
+        r.msg.includes('failed to re-enable') ||
+        r.msg.includes('disable period expired') ||
+        /(?:disable|disabled).*still.*active|still.*disabled.*after.*timeout/i.test(r.msg)
+      );
+      return hits.length ? `EPDLP remained disabled past its configured timeout ${hits.length} time(s) — enforcement did not automatically re-enable.` : false;
+    },
+    desc: 'After a "Disable All Services" operation, EPDLP should automatically re-enable after the configured timeout. If EPDLP remains disabled past this window, DLP enforcement is silently inactive without any user-visible indicator.',
+    recommend: 'Manually re-enable EPDLP via the NS Client UI or by restarting the EPDLP service. Check nsepdlpconfig.json for a stale disableEndTime value. Upgrade to R139+ which includes a fix for the stuck-disabled condition.',
+    source: 'R139.0.0 Early Access Release Note',
+  },
+  {
+    id: 'epdlp-password-archive-crash', category: 'epdlp',
+    title: 'Crash Scanning Password-Protected Archive',
+    severity: 'high', icon: '🔐',
+    match: () => false,
+    matchState: s => {
+      const errLog = s.files?.['epdlp_err'] || '';
+      const rows = Object.entries(s.parsedLogs).filter(([k]) => k.startsWith('epdlp_')).flatMap(([,r]) => r);
+      const inErr = /password[- ]protected|encrypted.*(?:zip|archive)|crash.*archive/i.test(errLog);
+      const inLog = rows.some(r => /password[- ]protected|password.*zip|encrypted.*archive|crash.*profile.*password/i.test(r.msg));
+      return (inErr || inLog) ? 'Crash associated with a password-protected or encrypted archive scan — known crash path fixed in R139.' : false;
+    },
+    desc: 'EPDLP crashed while evaluating a password-protected archive under "Evaluate All Possible DLP Profiles" mode. The archive scanner could not handle encrypted content, causing an unhandled exception and service restart.',
+    recommend: 'Upgrade to R139+ to eliminate this crash path. As a short-term workaround, configure a DLP profile exception for encrypted archive files. Review the crash dump in the epdlp/dump/ directory for the specific file that triggered the crash.',
+    source: 'R139.0.0 Early Access Release Note',
+  },
+  {
+    id: 'epdlp-ssl-mitm', category: 'epdlp',
+    title: 'SSL Inspection Breaking EPDLP mTLS Gateway Connection',
+    severity: 'high', icon: '🔓',
+    match: () => false,
+    matchState: s => {
+      const rows = Object.entries(s.parsedLogs).filter(([k]) => k.startsWith('epdlp_')).flatMap(([,r]) => r);
+      const hits = rows.filter(r =>
+        /(mp-gateway|dp-gateway|epdlp\.goskope)/.test(r.msg) &&
+        /(cert|ssl|tls|handshake|x509|verif|chain)/i.test(r.msg)
+      );
+      return hits.length
+        ? `${hits.length} TLS/certificate error(s) on EPDLP gateway connections — an SSL inspection proxy may be breaking the required mTLS handshake.`
+        : false;
+    },
+    desc: 'EPDLP uses mutual TLS (mTLS) with tenant-issued client certificates to *.epdlp.goskope.com. SSL inspection proxies intercept this and present their own certificate, which EPDLP rejects because the tenant cert chain is broken. This manifests as TLS errors near mp-gateway or dp-gateway log entries.',
+    recommend: 'Bypass SSL inspection for *.epdlp.goskope.com at the proxy/firewall — EPDLP mTLS cannot be re-proxied. Add the EPDLP gateway FQDNs to your SSL inspection bypass list and verify the bypass applies before the tunnel reaches Netskope.',
+    source: 'Netskope Endpoint DLP Agent Troubleshooting',
+  },
+  {
+    id: 'epdlp-gateway-eof', category: 'epdlp',
+    title: 'NS Client Intercepting EPDLP Gateway Connection (EOF)',
+    severity: 'info', icon: 'ℹ️',
+    match: () => false,
+    matchState: s => {
+      const rows = Object.entries(s.parsedLogs).filter(([k]) => k.startsWith('epdlp_')).flatMap(([,r]) => r);
+      const hits = rows.filter(r =>
+        r.msg.includes('gateway-connect') && /eof|reset|closed|unexpected.*end/i.test(r.msg)
+      );
+      return hits.length
+        ? `${hits.length} EOF/connection-reset event(s) on gateway-connect — the NS Client tunnel may be intercepting EPDLP's mTLS channel.`
+        : false;
+    },
+    desc: 'EOF on gateway-connect typically means the NS Client itself is closing the TCP connection before EPDLP completes its mTLS handshake. This happens when EPDLP traffic is steered through the NS tunnel rather than reaching Netskope directly.',
+    recommend: 'Verify that *.epdlp.goskope.com is in the NS Client bypass/exception list so EPDLP traffic reaches Netskope directly without going through the client tunnel. Check the NS Client steering configuration for EPDLP gateway FQDNs.',
+    source: 'Troubleshooting Agent Communication Problems',
+  },
+  {
+    id: 'epdlp-passthrough-mode', category: 'epdlp',
+    title: 'EPDLP Channel Running in Passthrough Mode',
+    severity: 'warning', icon: '↪️',
+    match: () => false,
+    matchState: s => {
+      const rows = Object.entries(s.parsedLogs).filter(([k]) => k.startsWith('epdlp_')).flatMap(([,r]) => r);
+      const hits = rows.filter(r =>
+        /passthrough mode|running in passthrough|passthrough.*active|enabled passthrough/i.test(r.msg) &&
+        !/passthrough mode disabled|disabl.*passthrough/i.test(r.msg)
+      );
+      if (!hits.length) return false;
+      const features = new Set();
+      for (const r of hits) {
+        if (/usb|content.ctrl|removable/i.test(r.msg)) features.add('USB Content Control');
+        if (/nfs|network.*file|smb/i.test(r.msg)) features.add('Network File Share');
+        if (/pcc|print/i.test(r.msg)) features.add('Printer Content Control');
+      }
+      const fList = features.size ? [...features].join(', ') : 'one or more EPDLP channels';
+      return `Passthrough mode active for ${fList} (${hits.length} event(s)) — DLP policies are not enforced for these channels.`;
+    },
+    desc: 'One or more EPDLP enforcement channels (USB Content Control, Network File Share, Printer Content Control) are in passthrough mode. In this state files pass through the channel without any DLP scanning or policy enforcement.',
+    recommend: 'Check the EPDLP local configuration for passthrough registry keys set to 1. Passthrough may have been enabled for troubleshooting or applied automatically due to a driver failure. Disable passthrough by removing the registry key or restarting EPDLP after resolving any underlying driver issue.',
+    source: 'Troubleshooting EPDLP Agent Issues',
+  },
+  {
+    id: 'epdlp-bt-policy-missing', category: 'epdlp',
+    title: 'Bluetooth Control Policy Not Loaded',
+    severity: 'warning', icon: '🔵',
+    match: () => false,
+    matchState: s => {
+      const rows = Object.entries(s.parsedLogs).filter(([k]) => k.startsWith('epdlp_')).flatMap(([,r]) => r);
+      if (rows.length < 50) return false;
+      if (!rows.some(r => /loaded policy/i.test(r.msg))) return false;
+      const hasBT = rows.some(r => /loaded policy.*bluetooth|bluetooth.*control.*policy|bluetooth.*loaded/i.test(r.msg));
+      return hasBT ? false : 'No "bluetooth control policy" load confirmation in EPDLP sys log — Bluetooth device control may be inactive or not configured.';
+    },
+    desc: 'EPDLP loaded other policies (confirming normal policy sync) but no Bluetooth Control policy was confirmed in the log. Files transferred via Bluetooth are not subject to DLP scanning or enforcement.',
+    recommend: 'Verify that a Bluetooth Control policy is assigned to this device/user group in the Netskope tenant. If Bluetooth DLP is expected to be enforced, check the policy assignment and trigger a manual policy sync. If Bluetooth control is intentionally not licensed, dismiss this finding.',
+    source: 'Troubleshooting EPDLP Agent Issues',
+  },
+  {
+    id: 'epdlp-nfs-policy-missing', category: 'epdlp',
+    title: 'Network File Share Control Policy Not Loaded',
+    severity: 'warning', icon: '📁',
+    match: () => false,
+    matchState: s => {
+      const rows = Object.entries(s.parsedLogs).filter(([k]) => k.startsWith('epdlp_')).flatMap(([,r]) => r);
+      if (rows.length < 50) return false;
+      if (!rows.some(r => /loaded policy/i.test(r.msg))) return false;
+      const hasNFS = rows.some(r => /loaded policy.*network.*control|network.*control.*policy.*loaded|network.*file.*share.*policy/i.test(r.msg));
+      return hasNFS ? false : 'No "network control policy" load confirmation in EPDLP sys log — network file share DLP enforcement may be inactive.';
+    },
+    desc: 'EPDLP loaded other policies but no Network File Share Control policy was confirmed. Network file share operations (SMB/CIFS, NFS) may not be subject to DLP scanning or block enforcement.',
+    recommend: 'Verify that a Network Control policy is assigned to this device/user group in the Netskope tenant. Check the policy fingerprint in status.json and compare with the expected policy. Trigger a manual policy sync and review the log for "network control policy" after the next policy load.',
+    source: 'Troubleshooting EPDLP Agent Issues',
+  },
+  {
+    id: 'epdlp-fallback-triggered', category: 'epdlp',
+    title: 'EPDLP Fallback Action Triggered',
+    severity: 'info', icon: '🔄',
+    match: () => false,
+    matchState: s => {
+      const rows = Object.entries(s.parsedLogs).filter(([k]) => k.startsWith('epdlp_')).flatMap(([,r]) => r);
+      const hits = rows.filter(r =>
+        r.msg.includes('fallback action') ||
+        r.msg.includes('applying fallback') ||
+        r.msg.includes('scan limit exceeded') ||
+        r.msg.includes('size limit exceeded') ||
+        r.msg.includes('error fallback') ||
+        /fallback.*triggered|triggered.*fallback/i.test(r.msg)
+      );
+      return hits.length ? `EPDLP fallback action triggered ${hits.length} time(s) — file events received error-fallback disposition instead of a policy-based result.` : false;
+    },
+    desc: 'EPDLP applied its configured fallback action (block/allow/allow-large-files) instead of a policy-based decision due to a scan error, file size limit, or connection failure. Depending on the fallback configuration, files that should have been blocked may have been allowed.',
+    recommend: 'Review the fallback configuration in the EPDLP tenant policy. Identify the root cause of the fallback triggers (scan errors, size limits, or connectivity). If the fallback action is "allow", consider tightening to "block" for sensitive environments.',
+    source: 'Endpoint DLP (eDLP)',
+  },
+  {
+    id: 'epdlp-dc-driver-error', category: 'epdlp',
+    title: 'Device Control Driver Error — USB Control Non-Functional',
+    severity: 'warning', icon: '💽',
+    match: () => false,
+    matchState: s => {
+      const rows = Object.entries(s.parsedLogs).filter(([k]) => k.startsWith('epdlp_')).flatMap(([,r]) => r);
+      const hits = rows.filter(r =>
+        r.msg.includes('Device Control Error') ||
+        r.msg.includes('Status = Device Control Error') ||
+        r.msg.includes('device control status error')
+      );
+      return hits.length ? `"Device Control Error" status detected ${hits.length} time(s) — USB device control is non-functional and a reboot may be required.` : false;
+    },
+    desc: 'EPDLP reported a Device Control Error status, meaning the USB device control subsystem failed to initialize or encountered a fatal runtime error. USB storage enforcement (block/read-only/allow by policy) is not active. Affects agents ≤R119 in certain driver conflict scenarios.',
+    recommend: 'Reboot the endpoint to clear the driver error state. If the error persists, run "sc query epdlpdrv" to check the driver state and reinstall the EPDLP component if needed. Upgrade to R120+ which includes driver stability improvements.',
+    source: 'Troubleshooting EPDLP Agent Issues (≤R119)',
+  },
+  {
+    id: 'epdlp-pcc-pdf-redirect', category: 'epdlp',
+    title: 'PCC Browser Print Redirected to "Save as PDF"',
+    severity: 'warning', icon: '🖨️',
+    match: () => false,
+    matchState: s => {
+      const rows = Object.entries(s.parsedLogs).filter(([k]) => k.startsWith('epdlp_')).flatMap(([,r]) => r);
+      const hits = rows.filter(r =>
+        r.msg.includes('Print to PDF') ||
+        r.msg.includes('PCCv2') ||
+        r.msg.includes('Microsoft Print to PDF') ||
+        /redirect.*print|print.*redirect|save as pdf/i.test(r.msg)
+      );
+      return hits.length
+        ? `${hits.length} browser print redirect event(s) to PDF — PCCv2 is intercepting browser prints for DLP evaluation before physical output.`
+        : false;
+    },
+    desc: 'PCCv2 (Printer Content Control v2, R130+) redirects browser print jobs to "Microsoft Print to PDF" first for DLP evaluation, then releases the print. Users see an unexpected "Save as PDF" dialog. If the DLP result is Allow but the physical print never follows, this redirect path is the cause.',
+    recommend: 'This is expected PCCv2 behavior for browser print DLP. If prints do not complete after the PDF step, verify the PCCv2 handler is releasing the job correctly. Check for interactions with custom printer policies. Upgrade to R139+ for print flow improvements.',
+    source: '260707-RCA for ENG-964497',
+  },
+  {
+    id: 'epdlp-dll-inject-fail', category: 'epdlp',
+    title: 'PCC Hook DLL Injection Failed',
+    severity: 'warning', icon: '💉',
+    match: () => false,
+    matchState: s => {
+      const rows = Object.entries(s.parsedLogs).filter(([k]) => k.startsWith('epdlp_')).flatMap(([,r]) => r);
+      const hits = rows.filter(r =>
+        /inject.*fail|hook.*dll.*fail|dll.*inject.*fail|failed.*inject|failed to hook|injection.*error/i.test(r.msg)
+      );
+      return hits.length
+        ? `${hits.length} DLL injection failure(s) — EPDLP hook DLL could not be loaded into print target process(es). PCC is not active for those processes.`
+        : false;
+    },
+    desc: 'EPDLP\'s Printer Content Control uses DLL injection to intercept print jobs. If injection fails (EDR blocking, code integrity policy, or process protection), PCC cannot intercept prints from that application and print jobs pass through without DLP scanning.',
+    recommend: 'Check whether an EDR product (CrowdStrike, Carbon Black, etc.) is blocking EPDLP DLL injection. Verify WDAC/AppLocker policies allow the EPDLP hook DLL. Add the EPDLP hook DLL path to security product exclusion lists for injection. Affects pre-PCCv2 agents (≤R129).',
+    source: 'Troubleshooting EPDLP Agent Issues',
+  },
+  {
+    id: 'epdlp-print-url-latency', category: 'epdlp',
+    title: 'Print Latency from EPDLP URL Retrieval',
+    severity: 'info', icon: '⏱️',
+    match: () => false,
+    matchState: s => {
+      const rows = Object.entries(s.parsedLogs).filter(([k]) => k.startsWith('epdlp_')).flatMap(([,r]) => r);
+      const hits = rows.filter(r =>
+        r.msg.includes('retrieving url') ||
+        r.msg.includes('fetching url') ||
+        r.msg.includes('url retrieval') ||
+        /print.*url.*fetch|url.*fetch.*print|slow.*print.*url/i.test(r.msg)
+      );
+      return hits.length
+        ? `${hits.length} URL retrieval event(s) during print jobs — can cause 36s–2min print latency in browser print scenarios (fixed in R139).`
+        : false;
+    },
+    desc: 'During browser print jobs, EPDLP retrieves the source URL for DLP context before allowing the print. On slow networks or when the URL endpoint is unresponsive, this adds 36 seconds to over 2 minutes of latency before the print dialog appears. Fixed in R139.',
+    recommend: 'Upgrade to R139+ to eliminate the URL retrieval latency. As a temporary workaround, reduce the URL fetch timeout in the EPDLP local config, or exclude high-volume print workflows from PCC until the upgrade.',
+    source: 'R139.0.0 Early Access Release Note',
+  },
+  {
+    id: 'epdlp-firefox-print-crash', category: 'epdlp',
+    title: 'Firefox Crash During Print (PCC)',
+    severity: 'high', icon: '🦊',
+    match: () => false,
+    matchState: s => {
+      const errLog = s.files?.['epdlp_err'] || '';
+      const rows = Object.entries(s.parsedLogs).filter(([k]) => k.startsWith('epdlp_')).flatMap(([,r]) => r);
+      const inErr = /firefox.*crash|crash.*firefox|firefox.*exception/i.test(errLog);
+      const inLog = rows.some(r => /firefox.*crash|crash.*firefox|firefox.*unhandled/i.test(r.msg));
+      return (inErr || inLog) ? 'Firefox crash detected in EPDLP context — known crash when printing from Firefox with EPDLP PCC active on Windows (fixed in R139).' : false;
+    },
+    desc: 'EPDLP\'s Printer Content Control caused Firefox to crash when printing on Windows with certain printer driver configurations. This is a known compatibility issue between the EPDLP print hook and Firefox\'s internal print handling.',
+    recommend: 'Upgrade to R139+ to resolve the Firefox print crash. As an interim workaround, disable PCC for Firefox processes in the EPDLP policy, or use an alternative browser for print-sensitive workflows. Attach crash dumps from epdlp/dump/ when opening a support case.',
+    source: 'R139.0.0 Early Access Release Note',
+  },
+  {
+    id: 'epdlp-acrobat-print-fail', category: 'epdlp',
+    title: 'Adobe Acrobat Print Block Failure (PCC)',
+    severity: 'warning', icon: '📕',
+    match: () => false,
+    matchState: s => {
+      const rows = Object.entries(s.parsedLogs).filter(([k]) => k.startsWith('epdlp_')).flatMap(([,r]) => r);
+      const hits = rows.filter(r =>
+        /acrobat|adobe.*reader|adobe.*pdf/i.test(r.msg) &&
+        /block.*fail|fail.*block|print.*fail|failed.*print|bypass.*print/i.test(r.msg)
+      );
+      return hits.length
+        ? `${hits.length} Adobe Acrobat print control failure(s) — PCC failed to block certain print operations from Acrobat Reader (fixed in R139).`
+        : false;
+    },
+    desc: 'EPDLP\'s Printer Content Control failed to enforce block decisions on certain printers when printing from Adobe Acrobat Reader. The print job completed despite a DLP block outcome. This is a known bug fixed in R139.',
+    recommend: 'Upgrade to R139+ to resolve the Acrobat print block bypass. As an interim measure, add supplemental DLP rules targeting Acrobat-specific print patterns or inform users that Acrobat printing is not fully enforced until the upgrade.',
+    source: 'R139.0.0 Early Access Release Note',
+  },
+  {
+    id: 'epdlp-plotter-scaling', category: 'epdlp',
+    title: 'Large-Format / Plotter Printer Scaling Issue (PCC)',
+    severity: 'warning', icon: '📐',
+    match: () => false,
+    matchState: s => {
+      const rows = Object.entries(s.parsedLogs).filter(([k]) => k.startsWith('epdlp_')).flatMap(([,r]) => r);
+      const hits = rows.filter(r =>
+        /magna|gerber|accumark|plotter|large[- ]format|wide[- ]format/i.test(r.msg) ||
+        /scale.*print.*error|print.*scale.*fail|image.*scale.*incorrect/i.test(r.msg)
+      );
+      return hits.length
+        ? `${hits.length} large-format/plotter print event(s) — image scaling errors detected, known issue with Magna/Gerber AccuMark pattern systems (fixed in R139).`
+        : false;
+    },
+    desc: 'EPDLP\'s Printer Content Control generates incorrect image scaling when intercepting print jobs destined for large-format or plotter printers (notably Magna/Gerber AccuMark pattern systems). The printed output is distorted or incorrectly scaled. Fixed in R139.',
+    recommend: 'Upgrade to R139+ to resolve the plotter scaling issue. As a workaround, exclude the specific plotter printer from PCC control in the EPDLP policy until the upgrade is complete.',
+    source: 'R139.0.0 Early Access Release Note',
+  },
+  {
+    id: 'epdlp-filter-driver-conflict', category: 'epdlp',
+    title: 'Third-Party Minifilter Driver Alongside epdlpdrv',
+    severity: 'info', icon: '🔌',
+    match: () => false,
+    matchState: s => {
+      const rows = Object.entries(s.parsedLogs).filter(([k]) => k.startsWith('epdlp_')).flatMap(([,r]) => r);
+      const hits = rows.filter(r =>
+        /fltmc|minifilter|filter.*attach/i.test(r.msg) &&
+        !/epdlpdrv|netskope/i.test(r.msg)
+      );
+      if (!hits.length) return false;
+      const drivers = new Set();
+      for (const r of hits) {
+        const m = r.msg.match(/(?:filter|driver)[:\s]+(\S+\.sys)/i);
+        if (m) drivers.add(m[1]);
+      }
+      return `Third-party minifilter driver(s) detected alongside epdlpdrv${drivers.size ? ': ' + [...drivers].join(', ') : ` (${hits.length} reference(s))`}. Multiple minifilters can interfere with EPDLP content control.`;
+    },
+    desc: 'One or more third-party Windows minifilter drivers are registered alongside the EPDLP filter driver (epdlpdrv). Minifilter altitude conflicts and callback ordering between security products can cause EPDLP to miss file events or behave incorrectly.',
+    recommend: 'Run "fltmc instances" on the endpoint to enumerate all active minifilters and their altitudes. Compare against Netskope\'s documented altitude range for epdlpdrv. If a third-party filter is at a conflicting altitude, work with that vendor to adjust the registration altitude or configure mutual exclusions.',
+    source: 'Interop Troubleshooting',
   },
 
   // ── INFORMATIONAL / BENIGN NOISE ──────────────────────────────────────────
