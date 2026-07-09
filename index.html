@@ -940,7 +940,7 @@ body {
 
 <script>
 // ─── Version ─────────────────────────────────────────────────────────────────
-const TOOL_VERSION = '1.11.3';
+const TOOL_VERSION = '1.12.0';
 
 // ─── State ────────────────────────────────────────────────────────────────────
 const state = {
@@ -982,6 +982,7 @@ const state = {
   bwanTunnel:    null,  // { hubIp, vip, routes[], pathCount, connected } from nsbwanclient
   identity: null,     // { username, email, domain, upn, source }
   zipFilename: null,
+  epdlp: null,        // { version, user, deviceId, os, timezone, status, fallback, bypass, policyFingerprint, policyLastLoad }
 };
 
 const ROW_H = 20;
@@ -1039,14 +1040,28 @@ function parseNPALine(line) {
   };
 }
 
+// EPDLP log format: YYYY/MM/DD HH:MM:SS.mmm SourceFile.cpp:line PID TID [level] message
+function parseEpdlpLine(line) {
+  const tsm = RE_TS.exec(line);
+  if (!tsm) return null;
+  const rest = line.slice(tsm[0].length);
+  const m = /^(\S+:\d+)\s+(\d+)\s+(\d+)\s+\[(\w+)\]\s+(.*)$/.exec(rest);
+  if (!m) return null;
+  const [, source, pid, tid, rawLevel, msg] = m;
+  const level = rawLevel === 'warning' ? 'warning' : rawLevel;
+  if (!LEVELS.has(level)) return null;
+  return { ts: tsm[1], level, pid, tid, source, component: 'EPDLP', msg: msg.trim(), raw: line };
+}
+
 function parseLogs(filename, text) {
   // Strip ALL carriage returns first (handles Windows \r\n, mixed, stray \r)
   const lines = text.replace(/\r/g, '').split('\n');
   const rows = [];
-  const isNPA = filename.toLowerCase().includes('npadebug');
+  const isNPA   = filename.toLowerCase().includes('npadebug');
+  const isEPDLP = filename.startsWith('epdlp_');
   for (const line of lines) {
     if (!line.trim()) continue;
-    const parsed = isNPA ? parseNPALine(line) : parseSTAgentLine(line);
+    const parsed = isNPA ? parseNPALine(line) : isEPDLP ? parseEpdlpLine(line) : parseSTAgentLine(line);
     if (parsed) {
       rows.push(parsed);
     } else {
@@ -1250,7 +1265,8 @@ async function loadZip(file) {
       'nsuser.conf','nsuserconfig.json','nsinternal.json',
       'nssteering.json','nsbwanconfig.json','eventcache.json',
       'nsdeviceid.json','nsdeviceidstatus.json',
-      'nsbwandebuglog.log','nsbwandebuglog_old.log','nsbwanclient.log'];
+      'nsbwandebuglog.log','nsbwandebuglog_old.log','nsbwanclient.log',
+      'nsepdlpconfig.json'];
 
     // Include the primary log + most recent rotated copy (.1.log only).
     // Also include all BWAN client logs (plain + gzip-compressed rotated).
@@ -1275,6 +1291,38 @@ async function loadZip(file) {
         } else {
           const text = await zip.files[name].async('text');
           state.files[base] = text;
+        }
+      } catch {}
+    }
+
+    // ── Nested EPDLP diagnostics zip ──────────────────────────────────────
+    // Can appear as "epdlp-diagnostics.zip" or "epdlp-diagnostics.zip.log"
+    const epdlpEntry = allNames.find(n => {
+      const b = n.split('/').pop();
+      return b === 'epdlp-diagnostics.zip' || b === 'epdlp-diagnostics.zip.log';
+    });
+    if (epdlpEntry) {
+      try {
+        showLoading('Loading EPDLP diagnostics…');
+        const epdlpRaw = await zip.files[epdlpEntry].async('arraybuffer');
+        const epdlpZip = await JSZip.loadAsync(epdlpRaw);
+        const epdlpTextMap = {
+          'config/tenant_config.json': 'epdlp_tenant_config.json',
+          'config/local_config.json':  'epdlp_local_config.json',
+          'public/status.json':        'epdlp_status.json',
+          'data/AccountData.json':     'epdlp_AccountData.json',
+          'logs/epdlp.err.log':        'epdlp_err',          // no .log — skip parser
+        };
+        const epdlpLogMap = {
+          'logs/epdlp_sys_log.txt':   'epdlp_sys_log.log',
+          'logs/epdlp_sys_log.1.txt': 'epdlp_sys_log.1.log',
+        };
+        for (const [src, dest] of Object.entries({ ...epdlpTextMap, ...epdlpLogMap })) {
+          if (epdlpZip.files[src]) {
+            try {
+              state.files[dest] = await epdlpZip.files[src].async('text');
+            } catch {}
+          }
         }
       } catch {}
     }
@@ -1425,6 +1473,71 @@ function processFiles() {
 
     if (state.files['appInfo.log']) {
       state.appInfo = parseAppInfoLog(state.files['appInfo.log']);
+    }
+
+    // ── EPDLP state extraction ────────────────────────────────────────────────
+    if (state.files['epdlp_sys_log.log'] || state.files['epdlp_status.json']) {
+      const ep = {};
+      // Parse status.json
+      if (state.files['epdlp_status.json']) {
+        try {
+          const st = JSON.parse(state.files['epdlp_status.json']);
+          ep.deviceStatus      = st.device_status;
+          ep.policyFingerprint = st.policy_fingerprint;
+          ep.policyLastLoad    = st.policy_last_load_success;
+          ep.processLastStart  = st.client_last_start;
+        } catch {}
+      }
+      // Parse local_config.json
+      if (state.files['epdlp_local_config.json']) {
+        try {
+          const lc = JSON.parse(state.files['epdlp_local_config.json']);
+          ep.logLevel         = lc.LogLevel;
+          ep.policyUpdateFreq = lc.PolicyUpdateFrequency;
+        } catch {}
+      }
+      // Parse tenant_config.json for fallback settings
+      if (state.files['epdlp_tenant_config.json']) {
+        try {
+          const tc = JSON.parse(state.files['epdlp_tenant_config.json']);
+          ep.offlineFallback   = tc.OfflineFallback  || tc.offlinefallback;
+          ep.errorFallback     = tc.ErrorFallback    || tc.errorfallback;
+          ep.fileSizeFallback  = tc.FileSizeFallback || tc.largefilefallback;
+        } catch {}
+      }
+      // Parse AccountData.json for enrolled user
+      if (state.files['epdlp_AccountData.json']) {
+        try {
+          const ad = JSON.parse(state.files['epdlp_AccountData.json']);
+          ep.user = Object.keys(ad)[0] || null;
+        } catch {}
+      }
+      // Extract system info from the sys log header block
+      const sysLog = state.files['epdlp_sys_log.log'] || '';
+      const sysBlock = sysLog.slice(0, 4000); // header is always near the top
+      const verM  = sysBlock.match(/Executable version:\s*(\S+)/);
+      const cpuM  = sysBlock.match(/CPU:\s*(.+)/);
+      const memM  = sysBlock.match(/Memory:\s*(.+)/);
+      const osM   = sysBlock.match(/OS:\s*(.+)/);
+      const tzM   = sysBlock.match(/Timezone:\s*(\S+)/);
+      // Device ID is the line immediately after the sysinfo header
+      const devM  = sysBlock.match(/System Information =====\n(\S+)/);
+      if (verM) ep.version  = verM[1];
+      if (cpuM) ep.cpu      = cpuM[1].trim();
+      if (memM) ep.memory   = memM[1].trim();
+      if (osM)  ep.os       = osM[1].trim();
+      if (tzM)  ep.timezone = tzM[1].trim();
+      if (devM) ep.deviceId = devM[1].trim();
+      // Check nsepdlpconfig.json for permanent bypass
+      if (state.files['nsepdlpconfig.json']) {
+        try {
+          const nc = JSON.parse(state.files['nsepdlpconfig.json']);
+          const endTime = nc?.epdlpOneTimeDisable?.epdlpDisableEndTime;
+          ep.bypassEndTime = endTime;
+          ep.bypassActive  = endTime === '4294967295' || Number(endTime) === 4294967295;
+        } catch {}
+      }
+      state.epdlp = ep;
     }
 
     showLoading('Analyzing traffic & identity…');
@@ -1958,6 +2071,108 @@ const ISSUE_PATTERNS = [
     desc: 'The Endpoint DLP UI component could not establish IPC with the stAgentSvc service, or the renderer failed to start. DLP endpoint features may not work.',
     recommend: 'Runbook: Verify stAgentSvc is running. Check for missing EPDLP binaries in the Netskope install directory. Reinstall the EPDLP component.',
     source: 'Runbook §NS Client UI',
+  },
+
+  // ── EPDLP findings (from epdlp-diagnostics.zip) ──────────────────────────
+  {
+    id: 'epdlp-bypass-active', category: 'config',
+    title: 'EPDLP Permanently Bypassed — One-Time Disable Password Active',
+    severity: 'critical', icon: '🔓',
+    match: () => false,
+    matchState: s => {
+      if (!s.epdlp?.bypassActive) return false;
+      return 'epdlpDisableEndTime = 4294967295 (MAX_UINT32) — EPDLP enforcement is permanently disabled via the one-time disable password.';
+    },
+    desc: 'The EPDLP one-time disable password has been used and the end-time is set to the maximum possible value (4294967295), meaning EPDLP enforcement will never automatically re-enable. DLP policies are not being enforced on this endpoint.',
+    recommend: 'Identify who used the disable password and why. Re-enable EPDLP enforcement by clearing nsepdlpconfig.json or restarting the EPDLP service without the bypass flag. Review audit logs for DLP activity during the bypass window.',
+    source: 'EPDLP diagnostics — nsepdlpconfig.json',
+  },
+  {
+    id: 'epdlp-cert-missing', category: 'tunnel',
+    title: 'EPDLP Offline — Client Certificates Missing',
+    severity: 'high', icon: '🔐',
+    match: () => false,
+    matchState: s => {
+      const rows = Object.entries(s.parsedLogs)
+        .filter(([k]) => k.startsWith('epdlp_'))
+        .flatMap(([, r]) => r);
+      return rows.some(r => r.msg.includes('Offline because client certs are missing'))
+        ? 'EPDLP cannot reach the gateway — mTLS client certificates are missing. Content scanning and event reporting will fail.'
+        : false;
+    },
+    desc: 'EPDLP uses mutual TLS (mTLS) with per-device certificates to authenticate to the Netskope gateway. The certificate files are missing or invalid, causing EPDLP to enter offline mode. DLP scan results cannot be sent, and the fallback action (block/allow/allow) will be applied to all files.',
+    recommend: 'Re-enroll the EPDLP client or restore the certificate from a backup. Check that the EPDLP certificate directory exists and is not empty. Verify the enrollment token is valid and the device is enrolled in the correct tenant.',
+    source: 'EPDLP diagnostics — epdlp_sys_log',
+  },
+  {
+    id: 'epdlp-policy-not-loaded', category: 'config',
+    title: 'EPDLP Cannot Evaluate — No Policy Loaded',
+    severity: 'high', icon: '📋',
+    match: () => false,
+    matchState: s => {
+      const rows = Object.entries(s.parsedLogs)
+        .filter(([k]) => k.startsWith('epdlp_'))
+        .flatMap(([, r]) => r);
+      const count = rows.filter(r => r.msg.includes("Can't evaluate, no policy loaded")).length;
+      return count > 0
+        ? `"Can\'t evaluate, no policy loaded" appeared ${count.toLocaleString()} time(s). EPDLP applied the error fallback action to all files during this period.`
+        : false;
+    },
+    desc: 'EPDLP workers attempted to evaluate DLP events but had no policy loaded — typically happens during startup before the first policy sync, or after a policy load failure. All file events during this window receive the error fallback action (block/allow depending on configuration).',
+    recommend: 'Check whether the policy eventually loaded (look for "Policy is up to date" in the log). If the policy never loaded, investigate connectivity to mp-gateway. Verify the policy fingerprint in public/status.json matches the downloaded policy.',
+    source: 'EPDLP diagnostics — epdlp_sys_log',
+  },
+  {
+    id: 'epdlp-crash-loop', category: 'tunnel',
+    title: 'EPDLP Process Crash / Restart Loop',
+    severity: 'critical', icon: '💥',
+    match: () => false,
+    matchState: s => {
+      const errLog = s.files?.['epdlp_err'] || '';
+      const starts = (errLog.match(/^Starting\.\.\./gm) || []).length;
+      if (starts < 2) return false;
+      const initFails = (errLog.match(/Failed to initialize client security/gm) || []).length;
+      return `EPDLP process restarted ${starts} time(s) in the log window (${initFails} "Failed to initialize client security" error(s)). DLP enforcement was unavailable during each restart.`;
+    },
+    desc: 'The EPDLP process crashed and restarted multiple times. Each restart cycle leaves a gap in DLP coverage. "Failed to initialize client security" is a known symptom when EPDLP cannot load its kernel extension, find its config, or validate its certificates.',
+    recommend: 'Check epdlp.err.log for the specific error preceding each "Starting..." entry. Common causes: kernel extension not approved (macOS SIP/MDM), missing config files, certificate issues, or conflict with a third-party security product. Run the EPDLP health check from the Netskope troubleshooting portal.',
+    source: 'EPDLP diagnostics — epdlp.err.log',
+  },
+  {
+    id: 'epdlp-dp-gateway-fail', category: 'tunnel',
+    title: 'EPDLP Data Plane Gateway Unreachable',
+    severity: 'warning', icon: '🌐',
+    match: () => false,
+    matchState: s => {
+      const rows = Object.entries(s.parsedLogs)
+        .filter(([k]) => k.startsWith('epdlp_'))
+        .flatMap(([, r]) => r);
+      const fails = rows.filter(r => r.msg.includes('dp-gateway') && /result\s+(?!200|204|304)\d+/.test(r.msg));
+      return fails.length > 0
+        ? `${fails.length} dp-gateway request failure(s). Content scan results cannot be delivered and DLP incidents may not be reported.`
+        : false;
+    },
+    desc: 'EPDLP failed to reach the data plane (dp-gateway) used to submit file scan results and DLP incidents. Content scanning may still run locally, but results cannot be sent to the tenant. The fallback action will be applied.',
+    recommend: 'Verify that dp-gateway-*.epdlp.goskope.com is reachable from this endpoint. Check for firewall rules blocking EPDLP outbound traffic. Ensure no proxy is MITM\'ing the mTLS connection (EPDLP uses mutual TLS — proxies break it).',
+    source: 'EPDLP diagnostics — epdlp_sys_log',
+  },
+  {
+    id: 'epdlp-mp-gateway-fail', category: 'tunnel',
+    title: 'EPDLP Management Plane Gateway Unreachable',
+    severity: 'critical', icon: '🌐',
+    match: () => false,
+    matchState: s => {
+      const rows = Object.entries(s.parsedLogs)
+        .filter(([k]) => k.startsWith('epdlp_'))
+        .flatMap(([, r]) => r);
+      const fails = rows.filter(r => r.msg.includes('mp-gateway') && r.level === 'error');
+      return fails.length > 0
+        ? `${fails.length} mp-gateway error(s). EPDLP cannot sync policy or report status to the tenant.`
+        : false;
+    },
+    desc: 'EPDLP failed to reach the management plane gateway (mp-gateway) used for policy sync, device status, and health reporting. Without MP connectivity, EPDLP runs on a stale policy and cannot receive policy updates or report its health state.',
+    recommend: 'Verify that mp-gateway-*.epdlp.goskope.com is reachable. Check for TLS certificate errors (mTLS is required). If a proxy sits in the path, verify it is not intercepting EPDLP traffic — EPDLP uses mutual TLS with tenant-issued certs that a proxy cannot re-sign.',
+    source: 'EPDLP diagnostics — epdlp_sys_log',
   },
 
   // ── INFORMATIONAL / BENIGN NOISE ──────────────────────────────────────────
@@ -3106,6 +3321,42 @@ function renderSysInfo() {
   if (nsRows.length) clientHtml += diSection('Netskope Client', s['NS Client Version'] || '', diKvGrid(nsRows), true);
   if (ds && Object.keys(ds).length) clientHtml += diSection('Device State', ds['Classification'] || '', diKvGrid(Object.entries(ds)), true);
   if (clientHtml) panels.client = { icon: '🛡️', label: 'Netskope Client', html: clientHtml };
+
+  // EPDLP panel
+  if (state.epdlp) {
+    const ep = state.epdlp;
+    const fmt = iso => { try { return new Date(iso).toLocaleString(); } catch { return iso; } };
+    const fallbackBadge = v => !v ? '' :
+      `<span style="color:${v==='block'?'#f85149':v==='allow'?'#3fb950':'#d29922'};font-weight:600">${v}</span>`;
+    const epRows = [
+      ['Version',              ep.version],
+      ['Enrolled User',        ep.user],
+      ['Device ID',            ep.deviceId],
+      ['OS',                   ep.os],
+      ['CPU',                  ep.cpu],
+      ['Memory',               ep.memory],
+      ['Timezone',             ep.timezone],
+      ['Process Status',       ep.deviceStatus],
+      ['Last Started',         ep.processLastStart ? fmt(ep.processLastStart) : null],
+      ['Policy Last Loaded',   ep.policyLastLoad   ? fmt(ep.policyLastLoad)   : null],
+      ['Policy Update Every',  ep.policyUpdateFreq ? `${ep.policyUpdateFreq}s` : null],
+      ['Log Level',            ep.logLevel],
+    ].filter(([,v]) => v);
+    const fallbackRows = [
+      ['Offline Fallback',   ep.offlineFallback   ? fallbackBadge(ep.offlineFallback)  : null],
+      ['Error Fallback',     ep.errorFallback     ? fallbackBadge(ep.errorFallback)    : null],
+      ['File Size Fallback', ep.fileSizeFallback  ? fallbackBadge(ep.fileSizeFallback) : null],
+    ].filter(([,v]) => v);
+    const bypassRow = ep.bypassActive
+      ? `<div style="margin-top:8px;padding:6px 10px;background:#3d1a1a;border:1px solid #f85149;border-radius:6px;color:#f85149;font-size:12px">
+          🔓 <strong>EPDLP Bypass Active</strong> — epdlpDisableEndTime = 4294967295 (permanent). DLP enforcement is disabled.
+         </div>` : '';
+    let epHtml = '';
+    if (epRows.length)      epHtml += diSection('EPDLP Agent', ep.version || '', diKvGrid(epRows), true);
+    if (fallbackRows.length) epHtml += diSection('Fallback Policy', ep.offlineFallback || '', `<div class="di-kv-grid">${fallbackRows.map(([k,v])=>`<span class="di-kv-key">${esc(k)}</span><span class="di-kv-val">${v}</span>`).join('')}</div>`, false);
+    if (bypassRow) epHtml += bypassRow;
+    if (epHtml) panels.epdlp = { icon: '🛡️', label: 'Endpoint DLP', html: epHtml };
+  }
 
   // Steering config panel
   const steeringHtml = buildSteeringPanel();
