@@ -940,7 +940,7 @@ body {
 
 <script>
 // ─── Version ─────────────────────────────────────────────────────────────────
-const TOOL_VERSION = '1.12.2';
+const TOOL_VERSION = '1.12.3';
 
 // ─── State ────────────────────────────────────────────────────────────────────
 const state = {
@@ -1040,6 +1040,21 @@ function parseNPALine(line) {
   };
 }
 
+// Format 3: nsbwanclient / bwanclient — one JSON object per line
+// {"timestamp":"2026-07-01T10:30:00.123Z","pid":1234,"file":"foo.cpp:456","level":"info","msg":"..."}
+function parseBWANClientLine(line) {
+  if (!line.trim() || line[0] !== '{') return null;
+  try {
+    const obj = JSON.parse(line);
+    if (typeof obj.msg !== 'string') return null;
+    const rawLevel = (obj.level || 'info').toLowerCase();
+    const level = rawLevel === 'warn' ? 'warning' : rawLevel;
+    if (!LEVELS.has(level)) return null;
+    const ts = (obj.timestamp || '').replace('T', ' ').replace(/\.\d+Z?$/, '');
+    return { ts, level, pid: String(obj.pid || ''), tid: '', source: obj.file || '', component: 'BWAN', msg: obj.msg, raw: line };
+  } catch { return null; }
+}
+
 // EPDLP log format: YYYY/MM/DD HH:MM:SS.mmm SourceFile.cpp:line PID TID [level] message
 function parseEpdlpLine(line) {
   const tsm = RE_TS.exec(line);
@@ -1057,11 +1072,15 @@ function parseLogs(filename, text) {
   // Strip ALL carriage returns first (handles Windows \r\n, mixed, stray \r)
   const lines = text.replace(/\r/g, '').split('\n');
   const rows = [];
-  const isNPA   = filename.toLowerCase().includes('npadebug');
-  const isEPDLP = filename.startsWith('epdlp_');
+  const isNPA        = filename.toLowerCase().includes('npadebug');
+  const isEPDLP      = filename.startsWith('epdlp_');
+  const isBWANClient = /^(?:nsbwan|bwan)client/.test(filename);
   for (const line of lines) {
     if (!line.trim()) continue;
-    const parsed = isNPA ? parseNPALine(line) : isEPDLP ? parseEpdlpLine(line) : parseSTAgentLine(line);
+    const parsed = isBWANClient ? parseBWANClientLine(line)
+                 : isNPA        ? parseNPALine(line)
+                 : isEPDLP      ? parseEpdlpLine(line)
+                 :                parseSTAgentLine(line);
     if (parsed) {
       rows.push(parsed);
     } else {
@@ -1265,7 +1284,7 @@ async function loadZip(file) {
       'nsuser.conf','nsuserconfig.json','nsinternal.json',
       'nssteering.json','nsbwanconfig.json','eventcache.json',
       'nsdeviceid.json','nsdeviceidstatus.json',
-      'nsbwandebuglog.log','nsbwandebuglog_old.log','nsbwanclient.log',
+      'nsbwandebuglog.log','nsbwandebuglog_old.log','nsbwanclient.log','nsbwanuidebuglog.log',
       'nsepdlpconfig.json'];
 
     // Include the primary log + most recent rotated copy (.1.log only).
@@ -3139,6 +3158,102 @@ const ISSUE_PATTERNS = [
     recommend: 'Check BWAN enrollment status and ensure the SD-WAN tunnel to the Netskope PoP is established. Verify routing and firewall rules allow BWAN tunnel traffic.',
     source: 'Dan Colwell — Field Enhancements',
   },
+  {
+    id: 'bwan-tunnel-down', category: 'sdwan',
+    title: 'BWAN Tunnel Down — PATH_COUNT: 0',
+    severity: 'high', icon: '📡',
+    match: () => false,
+    matchState: s => {
+      const rows = Object.entries(s.parsedLogs)
+        .filter(([k]) => /^(?:nsbwan|bwan)client/.test(k))
+        .flatMap(([, r]) => r);
+      const pathEvents = rows.filter(r => r.msg.includes('PATH_COUNT:'));
+      if (!pathEvents.length) return false;
+      const zeroEvents = pathEvents.filter(r => /PATH_COUNT:\s*0\b/.test(r.msg));
+      if (!zeroEvents.length) return false;
+      const lastIsDown = /PATH_COUNT:\s*0\b/.test(pathEvents[pathEvents.length - 1].msg);
+      return `BWAN tunnel down (PATH_COUNT: 0) ${zeroEvents.length} of ${pathEvents.length} path events — ${lastIsDown ? 'tunnel is currently disconnected' : 'tunnel recovered later in log window'}.`;
+    },
+    desc: 'PATH_COUNT: 0 means the BWAN overlay has no active paths to any hub — the SD-WAN tunnel is completely down. All SD-WAN traffic is dropped or falls back to direct internet if fail-close is not enabled.',
+    recommend: 'Check hub reachability (UDP 4500 to Netskope PoP). Verify the BWAN enrollment is valid and the device certificate has not expired. Review nsbwanclient.log around the PATH_COUNT: 0 event for the preceding error (DTLS handshake, enrollment failure, or adapter creation failure). If fail-close is enabled, all local traffic may be blocked.',
+    source: 'Borderless WAN Notes',
+  },
+  {
+    id: 'bwan-invalid-creds', category: 'sdwan',
+    title: 'BWAN Authentication Failure — Invalid Credentials',
+    severity: 'high', icon: '🔑',
+    match: () => false,
+    matchState: s => {
+      const rows = Object.entries(s.parsedLogs)
+        .filter(([k]) => /^(?:nsbwan|bwan)client/.test(k))
+        .flatMap(([, r]) => r);
+      const hits = rows.filter(r => /invalid credentials|ERROR_INVALID_TOKEN/i.test(r.msg));
+      if (!hits.length) return false;
+      return `BWAN authentication failure: ${hits.length} "Invalid Credentials" / "ERROR_INVALID_TOKEN" event(s) — refresh token failed during activation. First: "${hits[0].msg.slice(0, 100)}"`;
+    },
+    desc: 'BWAN reported invalid credentials or an invalid token during activation or config refresh — the #1 BWAN field escalation. The device cannot complete enrollment or maintain an authenticated session with the BWAN management plane, so no tunnel can be established.',
+    recommend: 'Re-authenticate the BWAN client: in the NS Client tray, sign out and sign back in. If the issue persists, delete the BWAN activation database (C:\\ProgramData\\Netskope\\bwan on Windows) and remove the device from the BWAN portal, then restart the NS Client to trigger fresh enrollment. Verify the IDP token has not expired and that the user account is licensed for BWAN.',
+    source: 'Field escalated client "Invalid Credential" issue',
+  },
+  {
+    id: 'bwan-config-no-url', category: 'sdwan',
+    title: 'BWAN Config Present but Enrollment URL Empty',
+    severity: 'high', icon: '🔗',
+    match: () => false,
+    matchState: s => {
+      if (!s.files?.['nsbwanconfig.json']) return false;
+      const hasUrl = !!(s.bwan?.bwanenrollmenturl || s.bwan?.bwanEnrollmentUrl || s.bwan?.enrollmentUrl
+        || (s.files['nsbwanconfig.json'].includes('enrollment') && s.files['nsbwanconfig.json'].match(/"[^"]*[Uu]rl[^"]*"\s*:\s*"https?:/)));
+      if (hasUrl) return false;
+      const rows = Object.entries(s.parsedLogs)
+        .filter(([k]) => /^(?:nsbwan|bwan)/.test(k))
+        .flatMap(([, r]) => r);
+      const logHit = rows.some(r => /enrollment url is not set|bwan.*url.*not set/i.test(r.msg));
+      return logHit
+        ? 'BWAN enrollment URL is not set — BWAN feature flag may not be enabled in URSA or the config has not been pulled yet.'
+        : 'nsbwanconfig.json is present but contains no enrollment URL — BWAN cannot locate the management plane to enroll.';
+    },
+    desc: 'The BWAN config file (nsbwanconfig.json) exists on this device but contains no enrollment URL. Without the enrollment URL, the BWAN client cannot initiate enrollment, fetch its config, or establish any tunnel. This typically means the BWAN feature flag was not enabled in the Netskope tenant (URSA) or the config has not yet been pushed to the device.',
+    recommend: 'In the Netskope admin console, verify that Endpoint SD-WAN is enabled for this tenant and that the device is in a group targeted by an SD-WAN policy. Trigger a manual config refresh via the NS Client tray or wait for the next scheduled pull (typically every 5 minutes). If the URL is still missing after a refresh, open a case with Netskope support referencing the tenant enrollment URL.',
+    source: 'Debugging ENG-775594',
+  },
+  {
+    id: 'bwan-not-steered', category: 'sdwan',
+    title: 'BWAN Enrolled but Not Steered',
+    severity: 'warning', icon: '↪️',
+    match: () => false,
+    matchState: s => {
+      const bwanUrl = s.bwan?.bwanenrollmenturl || s.bwan?.bwanEnrollmentUrl
+        || s.files?.['nsbwanconfig.json']?.match(/"[^"]*[Uu]rl[^"]*"\s*:\s*"(https?:[^"]+)"/)?.[1];
+      if (!bwanUrl) return false;
+      const st = s.steering || {};
+      const steered = st.bwan_apps_enabled == 1 || st.bwan_apps_off_prem == 1 || st.bwan_apps_on_prem == 1;
+      if (steered) return false;
+      return `BWAN is enrolled (${bwanUrl}) but nssteering.json shows bwan_apps_enabled=0, bwan_apps_off_prem=0, bwan_apps_on_prem=0 — no traffic is steered to the SD-WAN tunnel.`;
+    },
+    desc: 'The BWAN client is enrolled and a tunnel may be established, but the Netskope steering configuration has no SD-WAN apps enabled. Traffic that should go through the BWAN tunnel is bypassing it entirely — the tunnel is up but idle.',
+    recommend: 'In the Netskope admin console, verify the SD-WAN steering policy targets this device\'s group and that at least one application or destination is configured to steer through SD-WAN. Check whether bwan_apps_off_prem or bwan_apps_on_prem should be enabled based on user location. After updating the policy, trigger a steering config refresh.',
+    source: 'Windows BWAN Client Support TOI',
+  },
+  {
+    id: 'bwan-missing-ns-bypass', category: 'sdwan',
+    title: 'BWAN Processes Missing from NS Client Bypass',
+    severity: 'warning', icon: '🔓',
+    match: () => false,
+    matchState: s => {
+      const bwanUrl = s.bwan?.bwanenrollmenturl || s.bwan?.bwanEnrollmentUrl;
+      if (!bwanUrl) return false;
+      const raw = s.files?.['nsbypass.json'] || '';
+      if (!raw) return false;
+      const hasBypass = /bwanclient|bwansvc|netskope.sd.wan|infiot/i.test(raw);
+      return hasBypass ? false
+        : 'BWAN processes (bwanclient.exe, bwansvc.exe) not found in nsbypass.json — NS Client may intercept BWAN tunnel establishment traffic, breaking the mTLS handshake to the SD-WAN hub.';
+    },
+    desc: 'The BWAN client processes (bwanclient.exe and bwansvc.exe) are not in the NS Client cert-pinned bypass list. When the NS Client intercepts BWAN\'s tunnel establishment traffic, it breaks the DTLS/TLS handshake to the SD-WAN hub, preventing tunnel formation. The "Netskope SD-WAN" bypass entry should appear in nsbypass.json.',
+    recommend: 'In the Netskope admin console, verify that the "Netskope SD-WAN" application is listed in the cert-pinned bypass policy applied to this device. This is typically a stock Netskope bypass entry that should be present by default — if missing, add it and trigger a bypass config refresh. Reference the BWAN deployment guide for the required bypass configuration.',
+    source: 'Borderless WAN',
+  },
+
   {
     id: 'npa-exceptions-offprem-only', category: 'npa',
     title: 'NPA Exceptions — Off-Prem Only, No On-Prem Coverage',
