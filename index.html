@@ -741,6 +741,7 @@ body {
   <div class="tab" data-tab="traffic">🔄 Traffic</div>
   <div class="tab" data-tab="gslb">🌐 GSLB</div>
   <div class="tab" data-tab="npa">🔒 NPA</div>
+  <div class="tab" data-tab="aidiscovery">🤖 AI Discovery</div>
   <div class="tab" data-tab="flowlineage">🗺️ Flow Lineage</div>
   <div class="tab" data-tab="flowpath" data-beta="true">⚡ Flow Path <span style="font-size:9px;background:#bc8cff33;color:#bc8cff;border:1px solid #bc8cff55;border-radius:3px;padding:1px 4px;vertical-align:middle;font-weight:700">BETA</span></div>
   <div class="tab" data-tab="timeline" data-beta="true">📈 Timeline <span style="font-size:9px;background:#3fb95033;color:#3fb950;border:1px solid #3fb95055;border-radius:3px;padding:1px 4px;vertical-align:middle;font-weight:700">BETA</span></div>
@@ -868,6 +869,11 @@ body {
     <div style="flex:1;overflow-y:auto;padding:16px" id="npa-content"></div>
   </div>
 
+  <!-- AI Discovery -->
+  <div class="tab-panel" id="panel-aidiscovery">
+    <div style="flex:1;overflow-y:auto;padding:16px" id="aidiscovery-content"></div>
+  </div>
+
   <!-- Flow Lineage -->
   <div class="tab-panel" id="panel-flowlineage">
     <div style="flex:1;overflow:hidden;display:flex;flex-direction:column" id="flow-lineage-content"></div>
@@ -940,7 +946,7 @@ body {
 
 <script>
 // ─── Version ─────────────────────────────────────────────────────────────────
-const TOOL_VERSION = '1.12.3';
+const TOOL_VERSION = '1.12.4';
 
 // ─── State ────────────────────────────────────────────────────────────────────
 const state = {
@@ -983,6 +989,7 @@ const state = {
   identity: null,     // { username, email, domain, upn, source }
   zipFilename: null,
   epdlp: null,        // { version, user, deviceId, os, timezone, status, fallback, bypass, policyFingerprint, policyLastLoad }
+  aiDiscovery: null,  // parsed ai_discovery_gef_debug.json
 };
 
 const ROW_H = 20;
@@ -1285,7 +1292,7 @@ async function loadZip(file) {
       'nssteering.json','nsbwanconfig.json','eventcache.json',
       'nsdeviceid.json','nsdeviceidstatus.json',
       'nsbwandebuglog.log','nsbwandebuglog_old.log','nsbwanclient.log','nsbwanuidebuglog.log',
-      'nsepdlpconfig.json'];
+      'nsepdlpconfig.json','ai_discovery_gef_debug.json'];
 
     // Include the primary log + most recent rotated copy (.1.log only).
     // Also include all BWAN client logs (plain + gzip-compressed rotated).
@@ -1559,6 +1566,26 @@ function processFiles() {
       state.epdlp = ep;
     }
 
+    // ── AI Discovery state extraction ─────────────────────────────────────────
+    if (state.files['ai_discovery_gef_debug.json']) {
+      try {
+        state.aiDiscovery = JSON.parse(state.files['ai_discovery_gef_debug.json']);
+        const aid = state.aiDiscovery;
+        if (aid) {
+          const agentCount = (aid.ai_agents || []).length;
+          if (agentCount) state.sysinfo['AI Agents Detected'] = agentCount;
+          const sigVer = aid.ai_signature_version;
+          if (sigVer !== undefined)
+            state.sysinfo['AI Sig Version'] = sigVer === '0' ? 'Not downloaded' : sigVer;
+          const llmCount = (aid.llm_servers || []).length;
+          if (llmCount) state.sysinfo['Local LLM Servers'] = llmCount;
+          const extCount = (aid.browser_extensions || [])
+            .reduce((s, b) => s + (b.profiles||[]).reduce((ps, p) => ps + (p.extensions||[]).length, 0), 0);
+          if (extCount) state.sysinfo['AI Browser Extensions'] = extCount;
+        }
+      } catch {}
+    }
+
     showLoading('Analyzing traffic & identity…');
     state.gslbFile = null;   // reset to primary log on each new load
     parseTrafficData();
@@ -1627,6 +1654,7 @@ function renderAll() {
   renderFlowLineage();
   renderFlowPath();
   renderNPA();
+  renderAiDiscovery();
   populateFileSelect();
   // Sync All Files UI state (defaulted to true in reset)
   const _sel = document.getElementById('log-file-select');
@@ -3300,6 +3328,89 @@ const ISSUE_PATTERNS = [
     recommend: 'If DEM (Digital Experience Management) is licensed, enable it to capture per-application performance telemetry — hop-by-hop latency from the endpoint to the PoP and to the destination. This provides the data needed for an ISP or routing escalation. Also review the GSLB tab to confirm the user is connecting to their nearest PoP and is not pinned to a distant one.',
   },
 
+  // ── AI Discovery checks ───────────────────────────────────────────────────
+  {
+    id: 'ai-sig-not-downloaded', category: 'ai',
+    title: 'AI Signature File Never Downloaded',
+    severity: 'warning', icon: '🤖',
+    match: () => false,
+    matchState: s => {
+      if (!s.aiDiscovery) return false;
+      if (s.aiDiscovery.ai_signature_version !== '0') return false;
+      return 'ai_signature_version is "0" — the AI signature database has never been successfully downloaded to this endpoint';
+    },
+    desc: 'The AI Discovery signature file has never been downloaded to this endpoint. ai_signature_version "0" indicates the file has never been fetched from the update endpoint. Without signatures, AI Discovery may not detect all AI agents, browser extensions, or local LLM servers.',
+    recommend: 'Verify outbound HTTPS access to events.goskope.com:443. Check nsdebuglog.log for HTTP errors (502, 503) near "aidiscovery" or "ai_sigversion". If HTTP 502 persists, open a support case — the AI signature update service may be experiencing an outage.',
+    source: 'AI Discovery — ai_discovery_gef_debug.json',
+  },
+
+  {
+    id: 'ai-local-llm-server', category: 'ai',
+    title: 'Local LLM Server Detected (AI Discovery)',
+    severity: 'info', icon: '🧠',
+    match: () => false,
+    matchState: s => {
+      const servers = s.aiDiscovery?.llm_servers;
+      if (!servers?.length) return false;
+      const names = servers.map(srv => {
+        const models = (srv.models||[]).map(m => m.name).join(', ');
+        const net = srv.network || {};
+        return `${srv.process_info?.pname || 'unknown'} (${net.host||'?'}:${net.listen_port||'?'})` + (models ? ` — ${models}` : '');
+      });
+      return names.join('; ');
+    },
+    desc: 'One or more local LLM server processes were detected by AI Discovery. Local LLM servers (e.g. Ollama, LM Studio) expose an HTTP API on localhost that any application can query without authentication.',
+    recommend: 'Review whether local LLM usage is sanctioned under your AI governance policy. If the server is bound to 0.0.0.0 or a LAN interface rather than 127.0.0.1, any device on the network can query it — consider a firewall rule. Ensure the user is aware of your generative AI acceptable use policy.',
+    source: 'AI Discovery — ai_discovery_gef_debug.json',
+  },
+
+  {
+    id: 'ai-mcp-filesystem-scope', category: 'ai',
+    title: 'MCP Filesystem Server Scoped to Sensitive Path',
+    severity: 'warning', icon: '📂',
+    match: () => false,
+    matchState: s => {
+      const agents = s.aiDiscovery?.ai_agents;
+      if (!agents?.length) return false;
+      const hits = [];
+      for (const agent of agents) {
+        for (const srv of (agent.mcp_servers || [])) {
+          if (!/server-filesystem/i.test(srv.resolved_package || srv.name || '')) continue;
+          for (const arg of (srv.args || [])) {
+            if (typeof arg !== 'string' || !arg.startsWith('/')) continue;
+            if (/^\/(etc|var|private\/etc|private\/var|usr|Library\/Keychains|\.ssh)/.test(arg))
+              hits.push(`${srv.name}: ${arg}`);
+          }
+        }
+      }
+      if (!hits.length) return false;
+      return `MCP filesystem server scoped to sensitive path(s): ${hits.join('; ')}`;
+    },
+    desc: 'An AI client has an MCP filesystem server configured to read from sensitive system paths. MCP filesystem servers grant the connected AI model direct read access to the specified directory tree — anything in those paths can be included in model context.',
+    recommend: 'Review the MCP configuration in the AI client (Claude Desktop, Cursor, etc.) and restrict filesystem server paths to the minimum required working directories. Paths like /etc, /var, or ~/.ssh should not be exposed to LLM contexts.',
+    source: 'AI Discovery — ai_discovery_gef_debug.json',
+  },
+
+  {
+    id: 'ai-discovery-post-failed', category: 'ai',
+    title: 'AI Discovery Telemetry Upload Failing',
+    severity: 'warning', icon: '📤',
+    match: r => /ai.?discovery|aidiscovery/i.test(r.msg) && /fail|error|502|503|timeout/i.test(r.msg) && r.level === 'error',
+    desc: 'Log entries indicate failures uploading AI Discovery scan results to the Netskope cloud. Without successful uploads, the admin console AI Discovery dashboard will not reflect this endpoint\'s detected AI agents, browser extensions, or local LLM servers.',
+    recommend: 'Verify outbound HTTPS connectivity to events.goskope.com:443. Check for TLS interception or proxy issues on the log upload path. If failures persist after connectivity is confirmed, open a support case with the relevant nsdebuglog entries.',
+    source: 'nsdebuglog.log',
+  },
+
+  {
+    id: 'ai-sig-update-failed', category: 'ai',
+    title: 'AI Signature Update Returning HTTP Error',
+    severity: 'warning', icon: '⬇️',
+    match: r => /ai.?sig|aidiscovery.*sig|sig.*aidiscovery/i.test(r.msg) && /502|503|failed to (?:download|update|fetch)/i.test(r.msg),
+    desc: 'Log entries show the AI signature update request is failing with an HTTP error. The AI signature database defines what constitutes an AI agent, browser extension, or LLM server — without updates, newly released AI tools may not be detected.',
+    recommend: 'Check connectivity to the Netskope signature update endpoint. If consistent 502 errors appear, this may be a temporary service disruption — monitor for self-recovery. If it persists beyond 24 hours, open a support case referencing the "AI signature update" component.',
+    source: 'nsdebuglog.log',
+  },
+
   // ── FLAP DETECTION (temporal correlation) ─────────────────────────────────
   {
     id: 'swg-flap', category: 'tunnel', severity: 'high', icon: '🔄',
@@ -3348,6 +3459,7 @@ const CATEGORIES = {
   gslb:   { label: 'GSLB',   color: '#a371f7' },
   apps:   { label: 'Apps',   color: '#ff7b72' },
   epdlp:  { label: 'EPDLP',  color: '#e8614e' },
+  ai:     { label: 'AI Discovery', color: '#58a6ff' },
 };
 
 // ── GTF Check Engine (beta) ───────────────────────────────────────────────────
@@ -4038,6 +4150,25 @@ function renderSysInfo() {
       ...(d.npa ? [['NPA Targets', d.npa.join(', ')]] : []),
     ];
     panels.dem = { icon: '📡', label: 'DEM', html: diSection('DEM Configuration', d.demServiceEnabled ? 'Enabled' : 'Disabled', diKvGrid(demRows), true) };
+  }
+
+  // AI Discovery panel
+  if (state.aiDiscovery) {
+    const aid = state.aiDiscovery;
+    const agentCount = (aid.ai_agents || []).length;
+    const llmCount = (aid.llm_servers || []).length;
+    const extCount = (aid.browser_extensions || [])
+      .reduce((s, b) => s + (b.profiles||[]).reduce((ps, p) => ps + (p.extensions||[]).length, 0), 0);
+    const editorExtCount = (aid.editor_extensions || []).reduce((s, e) => s + (e.extensions||[]).length, 0);
+    const sigVer = aid.ai_signature_version || '0';
+    const aidRows = [
+      ['AI Agents Detected', agentCount],
+      ['Signature Version', sigVer === '0' ? 'Not downloaded' : sigVer],
+    ];
+    if (llmCount) aidRows.push(['Local LLM Servers', llmCount]);
+    if (extCount) aidRows.push(['AI Browser Extensions', extCount]);
+    if (editorExtCount) aidRows.push(['AI Editor Extensions', editorExtCount]);
+    panels.aidiscovery = { icon: '🤖', label: 'AI Discovery', html: diSection('AI Discovery', `${agentCount} agent${agentCount !== 1 ? 's' : ''} detected`, diKvGrid(aidRows), true), badge: llmCount };
   }
 
   // ── Build sidebar nav ────────────────────────────────────────────
@@ -8182,6 +8313,187 @@ function flBuildGroups() {
   }
 
   return Object.values(groupMap).sort((a,b) => (b.steered+b.bypassed) - (a.steered+a.bypassed));
+}
+
+function renderAiDiscovery() {
+  const container = document.getElementById('aidiscovery-content');
+  if (!container) return;
+
+  if (!state.aiDiscovery) {
+    container.innerHTML = `<div style="padding:40px;text-align:center;color:var(--color-fg-muted)">
+      <div style="font-size:48px;margin-bottom:12px">🤖</div>
+      <div style="font-size:16px;font-weight:600;margin-bottom:8px">No AI Discovery data</div>
+      <div style="font-size:13px">Upload a log bundle containing <code>ai_discovery_gef_debug.json</code> to see AI Discovery results.<br>This file is present in R141+ client bundles when AI Discovery is enabled.</div>
+    </div>`;
+    return;
+  }
+
+  const aid = state.aiDiscovery;
+  const agents    = aid.ai_agents || [];
+  const browserExts = aid.browser_extensions || [];
+  const editorExts  = aid.editor_extensions  || [];
+  const llmServers  = aid.llm_servers        || [];
+  const sigVer    = aid.ai_signature_version || '0';
+
+  const SID_LABEL = {
+    '10000001': 'MCP Config — Claude Desktop / Windsurf',
+    '10000002': 'MCP Config — alternate client',
+    '10000004': 'Native AI Application',
+    '20000001': 'Local LLM Server',
+    '30000001': 'Editor AI Extension',
+  };
+
+  const ts2str = ts => ts ? new Date(ts * 1000).toLocaleString() : '—';
+  const sigBadge = sigVer === '0'
+    ? `<span style="background:#f0883e22;color:#f0883e;border:1px solid #f0883e44;border-radius:4px;padding:1px 6px;font-size:11px;font-weight:700">NOT DOWNLOADED</span>`
+    : `<span style="background:#3fb95022;color:#3fb950;border:1px solid #3fb95044;border-radius:4px;padding:1px 6px;font-size:11px;font-weight:700">v${esc(sigVer)}</span>`;
+
+  const totalExtCount = browserExts.reduce((s, b) => s + (b.profiles||[]).reduce((ps, p) => ps + (p.extensions||[]).length, 0), 0);
+  const totalEditorExtCount = editorExts.reduce((s, e) => s + (e.extensions||[]).length, 0);
+
+  // Summary bar
+  let html = `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:20px">`;
+  for (const [label, value, extra] of [
+    ['AI Agents', agents.length, null],
+    ['Browser Exts', totalExtCount, null],
+    ['Editor Exts', totalEditorExtCount, null],
+    ['Local LLMs', llmServers.length, null],
+  ]) {
+    html += `<div style="background:var(--color-canvas-subtle);border:1px solid var(--color-border-muted);border-radius:8px;padding:12px 14px">
+      <div style="font-size:11px;color:var(--color-fg-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">${label}</div>
+      <div style="font-size:24px;font-weight:700;color:var(--color-fg-default)">${value}</div>
+    </div>`;
+  }
+  html += `<div style="background:var(--color-canvas-subtle);border:1px solid var(--color-border-muted);border-radius:8px;padding:12px 14px">
+    <div style="font-size:11px;color:var(--color-fg-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">AI Signature</div>
+    <div>${sigBadge}</div>
+  </div>`;
+  html += `</div>`;
+
+  // AI Agents
+  if (agents.length) {
+    html += `<div style="font-size:14px;font-weight:600;margin-bottom:10px;color:var(--color-fg-default)">🤖 AI Agents (${agents.length})</div>`;
+    for (const agent of agents) {
+      const sysId    = String(agent.system_id || '');
+      const typeLabel = SID_LABEL[sysId] || `System ID ${esc(sysId)}`;
+      const scanTime  = ts2str(agent.timestamp);
+      const mcpServers = agent.mcp_servers || [];
+      const hasProcInfo = !!agent.process_info;
+
+      html += `<div style="background:var(--color-canvas-subtle);border:1px solid var(--color-border-muted);border-radius:8px;padding:14px;margin-bottom:10px">`;
+      html += `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:${hasProcInfo || mcpServers.length ? '10px' : '0'}">
+        <span style="background:var(--color-accent-subtle);color:var(--color-accent-fg);border-radius:4px;padding:2px 8px;font-size:11px;font-weight:700;font-family:monospace">${esc(sysId)}</span>
+        <span style="font-size:13px;font-weight:600;color:var(--color-fg-default)">${esc(typeLabel)}</span>
+        <span style="font-size:11px;color:var(--color-fg-muted);margin-left:auto">${esc(scanTime)}</span>
+      </div>`;
+
+      if (hasProcInfo) {
+        const pi = agent.process_info;
+        html += `<div style="font-size:12px;color:var(--color-fg-muted);margin-bottom:${mcpServers.length ? '8px' : '0'}">
+          Process: <span style="color:var(--color-fg-default);font-family:monospace">${esc(pi.pname || '—')}</span>
+          ${pi.ppname ? ` &nbsp;·&nbsp; Parent: <span style="font-family:monospace">${esc(pi.ppname)}</span>` : ''}
+          ${pi.bin_path ? `<br><span style="font-family:monospace;font-size:11px;color:var(--color-fg-muted)">${esc(pi.bin_path)}</span>` : ''}
+        </div>`;
+      }
+
+      if (mcpServers.length) {
+        html += `<div style="font-size:12px;color:var(--color-fg-muted);margin-bottom:6px">MCP Servers (${mcpServers.length}):</div>`;
+        html += `<div style="display:flex;flex-direction:column;gap:4px">`;
+        for (const srv of mcpServers) {
+          const pkg     = srv.resolved_package || srv.command || '—';
+          const isFsSrv = /server-filesystem/i.test(pkg);
+          const fsArgs  = (srv.args || []).filter(a => typeof a === 'string' && a.startsWith('/'));
+          html += `<div style="background:var(--color-canvas-default);border:1px solid var(--color-border-subtle);border-radius:6px;padding:8px 10px">
+            <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap">
+              <span style="font-weight:600;font-size:12px;color:var(--color-fg-default)">${esc(srv.name || '—')}</span>
+              <span style="font-family:monospace;font-size:11px;color:var(--color-fg-muted)">${esc(pkg)}</span>
+              ${isFsSrv && fsArgs.length ? `<span style="font-size:11px;color:var(--color-fg-muted)">📁 ${fsArgs.map(a => esc(a)).join(', ')}</span>` : ''}
+            </div>
+          </div>`;
+        }
+        html += `</div>`;
+      }
+      html += `</div>`;
+    }
+  }
+
+  // Browser Extensions
+  if (browserExts.length) {
+    html += `<div style="font-size:14px;font-weight:600;margin:20px 0 10px;color:var(--color-fg-default)">🌐 Browser Extensions</div>`;
+    for (const browser of browserExts) {
+      html += `<div style="font-size:12px;font-weight:600;color:var(--color-fg-muted);text-transform:capitalize;margin-bottom:6px">${esc(browser.browser || '—')}</div>`;
+      for (const profile of (browser.profiles || [])) {
+        const exts = profile.extensions || [];
+        if (!exts.length) continue;
+        html += `<div style="margin-bottom:10px">
+          <div style="font-size:11px;color:var(--color-fg-muted);margin-bottom:4px">Profile: <span style="color:var(--color-fg-default)">${esc(profile.profile || '—')}</span></div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px">`;
+        for (const ext of exts) {
+          html += `<div style="background:var(--color-canvas-subtle);border:1px solid var(--color-border-muted);border-radius:6px;padding:6px 10px;font-size:12px">
+            <span style="font-weight:600">${esc(ext.name || '—')}</span>
+            <span style="color:var(--color-fg-muted);margin-left:4px">v${esc(ext.version || '?')}</span>
+          </div>`;
+        }
+        html += `</div></div>`;
+      }
+    }
+  }
+
+  // Editor Extensions
+  if (editorExts.length) {
+    html += `<div style="font-size:14px;font-weight:600;margin:20px 0 10px;color:var(--color-fg-default)">🖊️ Editor Extensions</div>`;
+    for (const editor of editorExts) {
+      const sysId = String(editor.system_id || '');
+      html += `<div style="font-size:12px;font-weight:600;color:var(--color-fg-muted);text-transform:capitalize;margin-bottom:6px">
+        ${esc(editor.editor || '—')}
+        ${sysId ? `<span style="font-size:10px;background:var(--color-accent-subtle);color:var(--color-accent-fg);border-radius:3px;padding:1px 5px;margin-left:6px">${esc(sysId)}</span>` : ''}
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px">`;
+      for (const ext of (editor.extensions || [])) {
+        html += `<div style="background:var(--color-canvas-subtle);border:1px solid var(--color-border-muted);border-radius:6px;padding:6px 10px;font-size:12px">
+          <span style="font-weight:600">${esc(ext.name || '—')}</span>
+          ${ext.publisher ? `<span style="color:var(--color-fg-muted);font-size:11px;margin-left:4px">${esc(ext.publisher)}</span>` : ''}
+          <span style="color:var(--color-fg-muted);margin-left:4px">v${esc(ext.version || '?')}</span>
+        </div>`;
+      }
+      html += `</div>`;
+    }
+  }
+
+  // LLM Servers
+  if (llmServers.length) {
+    html += `<div style="font-size:14px;font-weight:600;margin:20px 0 10px;color:var(--color-fg-default)">🧠 Local LLM Servers (${llmServers.length})</div>`;
+    for (const srv of llmServers) {
+      const pi  = srv.process_info || {};
+      const net = srv.network || {};
+      html += `<div style="background:var(--color-canvas-subtle);border:1px solid var(--color-border-muted);border-radius:8px;padding:14px;margin-bottom:10px">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:${pi.bin_path || (srv.models||[]).length ? '8px' : '0'}">
+          <span style="font-size:13px;font-weight:600">${esc(pi.pname || 'Unknown')}</span>
+          <span style="font-size:11px;color:var(--color-fg-muted);font-family:monospace">${esc(net.host || '?')}:${esc(String(net.listen_port || '?'))}</span>
+        </div>`;
+      if (pi.bin_path) {
+        html += `<div style="font-size:11px;color:var(--color-fg-muted);font-family:monospace;margin-bottom:8px">${esc(pi.bin_path)}</div>`;
+      }
+      const models = srv.models || [];
+      if (models.length) {
+        html += `<div style="font-size:12px;color:var(--color-fg-muted);margin-bottom:6px">Models (${models.length}):</div>
+        <div style="display:flex;flex-direction:column;gap:4px">`;
+        for (const m of models) {
+          const sizeGb = m.size ? (m.size / 1e9).toFixed(1) + ' GB' : '—';
+          html += `<div style="background:var(--color-canvas-default);border:1px solid var(--color-border-subtle);border-radius:6px;padding:6px 10px;font-size:12px;display:flex;gap:12px;flex-wrap:wrap">
+            <span style="font-weight:600;font-family:monospace">${esc(m.name || '—')}</span>
+            ${m.parameter_size ? `<span style="color:var(--color-fg-muted)">${esc(m.parameter_size)}</span>` : ''}
+            ${m.quantization   ? `<span style="color:var(--color-fg-muted)">${esc(m.quantization)}</span>` : ''}
+            <span style="color:var(--color-fg-muted)">${esc(sizeGb)}</span>
+          </div>`;
+        }
+        html += `</div>`;
+      }
+      html += `</div>`;
+    }
+  }
+
+  container.innerHTML = html;
 }
 
 function renderFlowLineage() {
