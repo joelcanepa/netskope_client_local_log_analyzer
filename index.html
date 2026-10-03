@@ -629,6 +629,76 @@ body {
 .cf-trunc button { font-size: 11px; padding: 2px 8px; border-radius: 4px; cursor: pointer;
   background: var(--bg3); border: 1px solid var(--border); color: var(--text); }
 .cf-trunc button:hover { border-color: var(--primary); }
+/* ── PCAP Viewer ──────────────────────────────────────────────── */
+.pcap-wrap { display:flex; flex:1; overflow:hidden; }
+.pcap-sidebar {
+  width:180px; flex-shrink:0; background:var(--bg2);
+  border-right:1px solid var(--border); display:flex; flex-direction:column;
+}
+.pcap-sidebar-hdr { padding:10px 12px 4px; font-size:10px; font-weight:700;
+  text-transform:uppercase; letter-spacing:.07em; color:var(--muted); }
+.pcap-sidebar-list { flex:1; overflow-y:auto; }
+.pcap-file-item { display:flex; align-items:center; gap:4px; padding:6px 12px;
+  font-size:11.5px; cursor:pointer; border-left:2px solid transparent;
+  transition:background .1s; user-select:none; }
+.pcap-file-item:hover { background:var(--bg3); }
+.pcap-file-item.active { background:var(--bg3); border-left-color:var(--primary); font-weight:600; }
+.pcap-fname { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.pcap-fsize { font-size:10px; color:var(--muted); }
+.pcap-drop-hint { padding:8px 12px; font-size:11px; color:var(--muted); text-align:center;
+  border-top:1px solid var(--border); cursor:pointer; }
+.pcap-drop-hint:hover { color:var(--primary); }
+.pcap-body { flex:1; display:flex; flex-direction:column; overflow:hidden; }
+.pcap-drop-zone { flex:1; display:flex; flex-direction:column; align-items:center;
+  justify-content:center; gap:8px; }
+.pcap-dz-icon { font-size:48px; }
+.pcap-dz-title { font-size:16px; font-weight:600; color:var(--text); }
+.pcap-dz-sub { font-size:12px; color:var(--muted); }
+.pcap-main { flex:1; display:flex; flex-direction:column; overflow:hidden; }
+.pcap-toolbar { display:flex; align-items:center; gap:8px; padding:6px 10px;
+  background:var(--bg2); border-bottom:1px solid var(--border); flex-shrink:0; }
+.pcap-filter-input { flex:1; max-width:400px; padding:3px 8px; font-size:12px;
+  background:var(--bg3); border:1px solid var(--border); border-radius:5px;
+  color:var(--text); outline:none; }
+.pcap-filter-input:focus { border-color:var(--primary); }
+.pcap-count-label { font-size:11px; color:var(--muted); white-space:nowrap; }
+.pcap-hdr-row { display:flex; align-items:center; padding:0 6px;
+  background:var(--bg2); border-bottom:1px solid var(--border);
+  font-size:10.5px; font-weight:600; color:var(--muted);
+  height:22px; flex-shrink:0; user-select:none; }
+.pcap-list { flex:1; overflow-y:scroll; overflow-x:hidden; font-size:11.5px; }
+.pcap-row { display:flex; align-items:center; padding:0 6px; cursor:pointer;
+  white-space:nowrap; border-bottom:1px solid transparent; }
+.pcap-row:hover { background:var(--bg2); }
+.pcap-row.selected { background:rgba(56,139,253,.15); }
+/* shared column widths */
+.pcc-num   { width:46px; flex-shrink:0; color:var(--muted); font-size:10.5px; }
+.pcc-time  { width:88px; flex-shrink:0; font-variant-numeric:tabular-nums; color:var(--muted); }
+.pcc-src   { width:155px; flex-shrink:0; overflow:hidden; text-overflow:ellipsis; }
+.pcc-arr   { width:18px; flex-shrink:0; text-align:center; color:var(--muted); }
+.pcc-dst   { width:155px; flex-shrink:0; overflow:hidden; text-overflow:ellipsis; }
+.pcc-proto { width:64px; flex-shrink:0; font-weight:600; font-size:11px; }
+.pcc-len   { width:46px; flex-shrink:0; text-align:right; color:var(--muted); }
+.pcc-info  { flex:1; overflow:hidden; text-overflow:ellipsis; padding-left:8px; }
+.pcap-detail { flex-shrink:0; height:260px; border-top:1px solid var(--border);
+  display:flex; flex-direction:column; overflow:hidden; }
+.pcap-detail-resizer { height:4px; background:var(--border); cursor:ns-resize; flex-shrink:0; }
+.pcap-detail-resizer:hover { background:var(--primary); }
+.pcap-detail-panes { flex:1; display:flex; overflow:hidden; }
+.pcap-tree-wrap { width:280px; flex-shrink:0; border-right:1px solid var(--border);
+  overflow-y:auto; padding:8px; }
+.pcap-hex-wrap { flex:1; overflow:auto; }
+.pcap-layer { margin-bottom:10px; }
+.pcap-layer-name { font-size:11px; font-weight:700; text-transform:uppercase;
+  letter-spacing:.05em; margin-bottom:3px; }
+.pcap-field { font-size:11px; padding-left:10px; line-height:1.6; }
+.pcap-fk { color:var(--muted); }
+.pcap-fv { color:var(--text); font-family:'SF Mono',ui-monospace,monospace; }
+.pcap-hex { margin:0; padding:8px 12px; font-size:11px; line-height:1.7;
+  font-family:'SF Mono','Cascadia Code',ui-monospace,monospace; white-space:pre;
+  color:var(--text); }
+.pcap-hex-off { color:var(--muted); user-select:none; }
+.pcap-hex-ascii { color:#56d364; }
 .info-card {
   background: var(--bg2);
   border: 1px solid var(--border);
@@ -807,6 +877,7 @@ body {
   <div class="tab" data-tab="flowlineage">🗺️ Flow Lineage</div>
   <div class="tab" data-tab="flowpath" data-beta="true">⚡ Flow Path <span style="font-size:9px;background:#bc8cff33;color:#bc8cff;border:1px solid #bc8cff55;border-radius:3px;padding:1px 4px;vertical-align:middle;font-weight:700">BETA</span></div>
   <div class="tab" data-tab="timeline" data-beta="true">📈 Timeline <span style="font-size:9px;background:#3fb95033;color:#3fb950;border:1px solid #3fb95055;border-radius:3px;padding:1px 4px;vertical-align:middle;font-weight:700">BETA</span></div>
+  <div class="tab" data-tab="pcap">🔬 PCAP <span class="tab-badge info" id="tab-pcap-count" style="display:none">0</span></div>
   <div class="tab" data-tab="configfiles">⚙️ Config Files <span class="tab-badge info" id="tab-config-count">0</span></div>
   <div class="tab" data-tab="sysinfo">🖥️ System Info</div>
 </div>
@@ -953,6 +1024,50 @@ body {
   </div>
 
 <!-- System Info -->
+  <!-- PCAP Viewer -->
+  <div class="tab-panel" id="panel-pcap">
+    <div class="pcap-wrap">
+      <div class="pcap-sidebar" id="pcap-sidebar">
+        <div class="pcap-sidebar-hdr">PCAP Files</div>
+        <div id="pcap-sidebar-list"></div>
+        <div class="pcap-drop-hint" ondragover="event.preventDefault()" ondrop="pcapHandleDrop(event)">+ Drop .pcap here</div>
+      </div>
+      <div class="pcap-body" id="pcap-body">
+        <!-- Drop zone shown when no files loaded -->
+        <div id="pcap-drop-zone" class="pcap-drop-zone" ondragover="event.preventDefault()" ondrop="pcapHandleDrop(event)">
+          <div class="pcap-dz-icon">🔬</div>
+          <div class="pcap-dz-title">Drop a .pcap or .pcapng file</div>
+          <div class="pcap-dz-sub">or include one in the diagnostic ZIP bundle</div>
+        </div>
+        <!-- Main view shown when file is loaded -->
+        <div id="pcap-main" class="pcap-main" style="display:none">
+          <div class="pcap-toolbar">
+            <input id="pcap-filter" class="pcap-filter-input" type="text" placeholder="Filter by IP, port, protocol, or info…" oninput="pcapFilter(this.value)" />
+            <span id="pcap-count" class="pcap-count-label"></span>
+          </div>
+          <div class="pcap-hdr-row">
+            <span class="pcc-num">#</span>
+            <span class="pcc-time">Time (s)</span>
+            <span class="pcc-src">Source</span>
+            <span class="pcc-arr">→</span>
+            <span class="pcc-dst">Destination</span>
+            <span class="pcc-proto">Proto</span>
+            <span class="pcc-len">Len</span>
+            <span class="pcc-info">Info</span>
+          </div>
+          <div id="pcap-list" class="pcap-list" onscroll="pcapVsRender(false)"></div>
+          <div id="pcap-detail" class="pcap-detail" style="display:none">
+            <div class="pcap-detail-resizer" id="pcap-resizer"></div>
+            <div class="pcap-detail-panes">
+              <div id="pcap-tree-wrap" class="pcap-tree-wrap"></div>
+              <div id="pcap-hex-wrap" class="pcap-hex-wrap"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div class="tab-panel" id="panel-configfiles">
     <div class="cf-panel">
       <div class="cf-sidebar" id="cf-sidebar"></div>
@@ -1024,7 +1139,7 @@ body {
 
 <script>
 // ─── Version ─────────────────────────────────────────────────────────────────
-const TOOL_VERSION = '1.13.0';
+const TOOL_VERSION = '1.13.1';
 
 // ─── State ────────────────────────────────────────────────────────────────────
 const state = {
@@ -1068,6 +1183,7 @@ const state = {
   zipFilename: null,
   epdlp: null,        // { version, user, deviceId, os, timezone, status, fallback, bypass, policyFingerprint, policyLastLoad }
   aiDiscovery: null,  // parsed ai_discovery_gef_debug.json
+  pcaps: {},          // filename -> ArrayBuffer for .pcap/.pcapng files
 };
 
 const ROW_H = 20;
@@ -1429,6 +1545,17 @@ async function loadZip(file) {
           }
         }
       } catch {}
+    }
+
+    // ── PCAP / PCAP-NG files (stored as binary ArrayBuffer) ──────────────────
+    for (const name of allNames) {
+      const base = name.split('/').pop();
+      if (/\.(pcap|pcapng)$/i.test(base)) {
+        try {
+          showLoading(`Reading ${base}…`);
+          state.pcaps[base] = await zip.files[name].async('arraybuffer');
+        } catch {}
+      }
     }
 
     processFiles();
@@ -6631,6 +6758,7 @@ function setActiveTab(tab) {
   }, 50);
   if (tab === 'timeline') setTimeout(renderTimeline, 0);
   if (tab === 'configfiles') setTimeout(renderConfigFiles, 0);
+  if (tab === 'pcap') setTimeout(renderPcapTab, 0);
 }
 
 function toggleBetaTabs(enabled) {
@@ -6851,6 +6979,459 @@ function cfCopy() {
     const btn = document.querySelector('.cf-toolbar .cf-btn');
     if (btn) { const t = btn.textContent; btn.textContent = '✓ Copied'; setTimeout(() => btn.textContent = t, 1500); }
   }).catch(() => {});
+}
+
+// ─── PCAP Viewer ──────────────────────────────────────────────────────────────
+
+// ── Parser ────────────────────────────────────────────────────────────────────
+function pcapParse(ab) {
+  const v = new DataView(ab);
+  if (ab.byteLength < 4) return null;
+  const magic = v.getUint32(0, false);
+  if (magic === 0xa1b2c3d4 || magic === 0xd4c3b2a1)
+    return pcapParseClassic(ab, v, magic === 0xd4c3b2a1);
+  if (magic === 0x0a0d0d0a)
+    return pcapParseNg(ab, v);
+  return null;
+}
+
+function pcapParseClassic(ab, v, le) {
+  const linkType = v.getUint32(20, le);
+  const packets = [];
+  let off = 24;
+  while (off + 16 <= ab.byteLength) {
+    const tsSec  = v.getUint32(off, le);
+    const tsUsec = v.getUint32(off + 4, le);
+    const capLen = v.getUint32(off + 8, le);
+    const origLen = v.getUint32(off + 12, le);
+    off += 16;
+    if (capLen === 0 || capLen > 0xffff || off + capLen > ab.byteLength) break;
+    packets.push({ tsSec, tsUsec, capLen, origLen, dataOffset: off, linkType });
+    off += capLen;
+  }
+  return { ab, packets };
+}
+
+function pcapParseNg(ab, v) {
+  const order = v.getUint32(8, false);
+  const le = order === 0x1a2b3c4d;
+  const packets = [], ifaces = [];
+  let off = 0;
+  while (off + 12 <= ab.byteLength) {
+    const btype = v.getUint32(off, le);
+    const blen  = v.getUint32(off + 4, le);
+    if (blen < 12 || off + blen > ab.byteLength) break;
+    if (btype === 0x00000001 && off + 10 <= ab.byteLength) { // IDB
+      ifaces.push(v.getUint16(off + 8, le));
+    } else if (btype === 0x00000006 && off + 28 <= ab.byteLength) { // EPB
+      const ifIdx  = v.getUint32(off + 8, le);
+      const tsHi   = v.getUint32(off + 12, le);
+      const tsLo   = v.getUint32(off + 16, le);
+      const capLen = v.getUint32(off + 20, le);
+      const origLen = v.getUint32(off + 24, le);
+      const us64   = tsHi * 4294967296 + tsLo;
+      packets.push({ tsSec: Math.floor(us64/1e6), tsUsec: us64 % 1e6,
+        capLen, origLen, dataOffset: off + 28, linkType: ifaces[ifIdx] ?? 1 });
+    } else if (btype === 0x00000003 && off + 12 <= ab.byteLength) { // SPB
+      const origLen = v.getUint32(off + 8, le);
+      packets.push({ tsSec: 0, tsUsec: 0, capLen: Math.min(origLen, blen - 20),
+        origLen, dataOffset: off + 12, linkType: ifaces[0] ?? 1 });
+    }
+    off += blen;
+  }
+  return { ab, packets };
+}
+
+// ── Decoder ───────────────────────────────────────────────────────────────────
+function pcapDecodePacket(parsed, meta, idx, baseTs) {
+  const b = new Uint8Array(parsed.ab, meta.dataOffset,
+    Math.min(meta.capLen, parsed.ab.byteLength - meta.dataOffset));
+  const ts = meta.tsSec + meta.tsUsec / 1e6;
+  const r = { num: idx+1, ts: ts - baseTs, length: meta.origLen,
+    protocol:'?', srcIP:'', dstIP:'', srcPort:null, dstPort:null, info:'', layers:[], bytes:b };
+  pcapDecodeL2(b, meta.linkType, r);
+  if (r.protocol === '?' && r.srcIP) r.protocol = 'IP';
+  if (!r.info && r.srcPort != null)
+    r.info = `${r.srcIP}:${r.srcPort} → ${r.dstIP}:${r.dstPort}`;
+  return r;
+}
+
+function pcapMac(b, o) {
+  return [b[o],b[o+1],b[o+2],b[o+3],b[o+4],b[o+5]].map(x=>x.toString(16).padStart(2,'0')).join(':');
+}
+function pcapIP4(b, o) { return `${b[o]}.${b[o+1]}.${b[o+2]}.${b[o+3]}`; }
+function pcapIP6(b, o) {
+  const g = [];
+  for (let i=0;i<16;i+=2) g.push(((b[o+i]<<8)|b[o+i+1]).toString(16));
+  return g.join(':').replace(/(?:^|:)(?:0:){2,}/, '::');
+}
+
+function pcapDecodeL2(b, lt, r) {
+  if (lt === 1) { // Ethernet
+    if (b.length < 14) return;
+    let et = (b[12]<<8)|b[13], off = 14;
+    if (et === 0x8100 && b.length > 18) { et = (b[16]<<8)|b[17]; off = 18; }
+    r.layers.push({ name:'Ethernet', color:'#8b949e',
+      fields:[['Src', pcapMac(b,0)],['Dst', pcapMac(b,6)],['Type','0x'+et.toString(16)]] });
+    if (et === 0x0800) pcapDecodeIP4(b, off, r);
+    else if (et === 0x86DD) pcapDecodeIP6(b, off, r);
+    else if (et === 0x0806) { r.protocol='ARP'; r.info='ARP'; }
+  } else if (lt === 101 || lt === 228) { pcapDecodeIP4(b, 0, r); }
+  else if (lt === 229) { pcapDecodeIP6(b, 0, r); }
+}
+
+function pcapDecodeIP4(b, o, r) {
+  if (b.length < o+20) return;
+  const ihl = (b[o]&0xf)*4, ttl = b[o+8], proto = b[o+9];
+  const src = pcapIP4(b,o+12), dst = pcapIP4(b,o+16);
+  r.srcIP=src; r.dstIP=dst;
+  r.layers.push({ name:'IPv4', color:'#388bfd',
+    fields:[['Src',src],['Dst',dst],['TTL',ttl],['Proto',proto],['Len',(b[o+2]<<8)|b[o+3]]] });
+  pcapDecodeL4(b, o+ihl, proto, r);
+}
+
+function pcapDecodeIP6(b, o, r) {
+  if (b.length < o+40) return;
+  const src = pcapIP6(b,o+8), dst = pcapIP6(b,o+24);
+  r.srcIP=src; r.dstIP=dst;
+  r.layers.push({ name:'IPv6', color:'#388bfd',
+    fields:[['Src',src],['Dst',dst],['Hop Limit',b[o+7]],['Next Hdr',b[o+6]]] });
+  pcapDecodeL4(b, o+40, b[o+6], r);
+}
+
+const _TFLAGS = ['FIN','SYN','RST','PSH','ACK','URG'];
+function pcapDecodeL4(b, o, proto, r) {
+  if (proto === 6) {            // TCP
+    if (b.length < o+20) return;
+    const sp=(b[o]<<8)|b[o+1], dp=(b[o+2]<<8)|b[o+3];
+    const doff=((b[o+12]>>4)&0xf)*4;
+    const flags=_TFLAGS.filter((_,i)=>b[o+13]&(1<<i)).reverse().join(' ') || '—';
+    r.srcPort=sp; r.dstPort=dp; r.protocol='TCP';
+    r.layers.push({ name:'TCP', color:'#3fb950',
+      fields:[['Src Port',sp],['Dst Port',dp],['Flags',flags]] });
+    const pay = b.slice(o+doff);
+    if (pay.length) pcapDecodeApp(pay,sp,dp,r);
+    else if (!r.info) r.info=`[${flags}]`;
+  } else if (proto === 17) {    // UDP
+    if (b.length < o+8) return;
+    const sp=(b[o]<<8)|b[o+1], dp=(b[o+2]<<8)|b[o+3];
+    r.srcPort=sp; r.dstPort=dp; r.protocol='UDP';
+    r.layers.push({ name:'UDP', color:'#d2a8ff',
+      fields:[['Src Port',sp],['Dst Port',dp],['Len',(b[o+4]<<8)|b[o+5]]] });
+    const pay = b.slice(o+8);
+    if (pay.length) pcapDecodeApp(pay,sp,dp,r);
+  } else if (proto === 1) {     // ICMP
+    const names={0:'Echo Reply',3:'Dest Unreachable',8:'Echo Request',11:'TTL Exceeded'};
+    r.protocol='ICMP'; r.info=`ICMP ${names[b[o]]||'type '+b[o]}`;
+    r.layers.push({ name:'ICMP', color:'#e3b341', fields:[['Type',b[o]],['Code',b[o+1]]] });
+  } else if (proto === 58) {    // ICMPv6
+    r.protocol='ICMPv6'; r.info=`ICMPv6 type ${b[o]}`;
+    r.layers.push({ name:'ICMPv6', color:'#e3b341', fields:[['Type',b[o]]] });
+  }
+}
+
+function pcapDecodeApp(pay, sp, dp, r) {
+  // DNS
+  if (sp===53||dp===53) { pcapDecodeDNS(pay,r); return; }
+  // TLS: content-type 0x14–0x17, major version 0x03
+  if (pay.length>5 && pay[0]>=0x14 && pay[0]<=0x17 && pay[1]===0x03) {
+    pcapDecodeTLS(pay,r,'TLS'); return;
+  }
+  // DTLS: same content-type range, major version 0xfe
+  if (pay.length>13 && pay[0]>=0x14 && pay[0]<=0x17 && pay[1]===0xfe) {
+    pcapDecodeTLS(pay,r,'DTLS'); return;
+  }
+  // HTTP
+  const txt = new TextDecoder('utf-8',{fatal:false}).decode(pay.slice(0,300));
+  const req = txt.match(/^(GET|POST|PUT|DELETE|HEAD|CONNECT|OPTIONS|PATCH) (\S+) HTTP/);
+  const res = txt.match(/^HTTP\/\S+ (\d{3}[^\r\n]{0,40})/);
+  if (req) {
+    r.protocol='HTTP'; r.info=`${req[1]} ${req[2]}`;
+    r.layers.push({ name:'HTTP',color:'#ffa657', fields:[['Method',req[1]],['URI',req[2]]] }); return;
+  }
+  if (res) {
+    r.protocol='HTTP'; r.info=`HTTP ${res[1]}`;
+    r.layers.push({ name:'HTTP',color:'#ffa657', fields:[['Response',res[1]]] }); return;
+  }
+  // Port hints
+  const WK={80:'HTTP',443:'TLS',8443:'TLS',4500:'DTLS/IPsec',53:'DNS',22:'SSH',3389:'RDP',8080:'HTTP'};
+  const hint = WK[dp]||WK[sp];
+  if (hint) { r.protocol=hint; if (!r.info) r.info=`${hint} (${pay.length} B)`; }
+}
+
+function pcapDecodeDNS(b, r) {
+  r.protocol='DNS';
+  if (b.length<12) { r.info='DNS (short)'; return; }
+  const flags=(b[2]<<8)|b[3];
+  const isResp=(flags>>15)&1, rcode=flags&0xf, anCount=(b[6]<<8)|b[7];
+  let off=12; const labels=[];
+  try {
+    while (off<b.length && b[off]!==0) {
+      if ((b[off]&0xc0)===0xc0) { off+=2; break; }
+      const len=b[off++]; labels.push(String.fromCharCode(...b.slice(off,off+len))); off+=len;
+    }
+    off++;
+  } catch {}
+  const qname=labels.join('.');
+  const qtype=off+1<b.length?(b[off]<<8)|b[off+1]:0;
+  const QT={1:'A',2:'NS',5:'CNAME',6:'SOA',12:'PTR',15:'MX',16:'TXT',28:'AAAA',33:'SRV',255:'ANY'};
+  const typeName=QT[qtype]||`T${qtype}`;
+  const statusIcon = isResp ? (rcode?'✗':'✓') : '?';
+  r.info=`${statusIcon} ${qname} ${typeName}${anCount?` (${anCount} ans)`:''}`;
+  r.layers.push({ name:'DNS', color:'#56d364',
+    fields:[['Name',qname],['Type',typeName],['Dir',isResp?'Response':'Query'],['Answers',anCount]] });
+}
+
+function pcapDecodeTLS(b, r, proto) {
+  r.protocol = proto;
+  const ct=b[0];
+  const CT={0x14:'ChangeCipherSpec',0x15:'Alert',0x16:'Handshake',0x17:'Application Data'};
+  const ctName=CT[ct]||`Type ${ct}`;
+  const recLen=(b[3]<<8)|b[4];
+  // DTLS has extra fields: epoch(2)+seqno(6)+fragoff(3)+fraglen(3) before handshake body
+  const hsOff = proto==='DTLS' ? 13 : 5;
+  if (ct===0x16 && b.length>hsOff) {
+    const HS={1:'ClientHello',2:'ServerHello',4:'NewSessionTicket',8:'EncryptedExtensions',
+              11:'Certificate',12:'ServerKeyExchange',14:'ServerHelloDone',16:'ClientKeyExchange',20:'Finished'};
+    const hsType=b[hsOff]; const hsName=HS[hsType]||`HS ${hsType}`;
+    if (hsType===1) {
+      const sniStart = proto==='DTLS' ? hsOff+1+3+2+32 : hsOff+1+3+2+32; // after type+len+ver+random
+      const sni = pcapExtractSNI(b, proto==='DTLS' ? hsOff+12 : hsOff+4);
+      const fields=[['Handshake',hsName]];
+      if (sni) fields.push(['SNI',sni]);
+      r.info=`${proto} ClientHello${sni?' → '+sni:''}`;
+      r.layers.push({ name:proto, color:'#bc8cff', fields }); return;
+    }
+    r.info=`${proto} ${hsName}`;
+    r.layers.push({ name:proto, color:'#bc8cff', fields:[['Handshake',hsName]] });
+  } else if (ct===0x17) {
+    r.info=`${proto} App Data (${recLen} B)`;
+    r.layers.push({ name:proto, color:'#bc8cff', fields:[['Type','Application Data'],['Length',recLen]] });
+  } else {
+    r.info=`${proto} ${ctName}`;
+    r.layers.push({ name:proto, color:'#bc8cff', fields:[['Type',ctName]] });
+  }
+}
+
+function pcapExtractSNI(b, chBodyStart) {
+  // chBodyStart = byte after TLS handshake header (past type+len3), points to ClientVersion
+  let o = chBodyStart + 2 + 32; // skip ClientVersion(2) + Random(32)
+  if (o >= b.length) return null;
+  o += 1 + b[o]; // skip SessionID len + data
+  if (o+2 >= b.length) return null;
+  o += 2 + ((b[o]<<8)|b[o+1]); // skip CipherSuites
+  if (o >= b.length) return null;
+  o += 1 + b[o]; // skip CompressionMethods
+  if (o+2 >= b.length) return null;
+  const extEnd = o+2+((b[o]<<8)|b[o+1]); o += 2;
+  while (o+4 <= extEnd && o+4 <= b.length) {
+    const eType=(b[o]<<8)|b[o+1], eLen=(b[o+2]<<8)|b[o+3]; o+=4;
+    if (eType===0 && o+5<=b.length) {
+      const nLen=(b[o+3]<<8)|b[o+4];
+      if (o+5+nLen<=b.length) return new TextDecoder().decode(b.slice(o+5,o+5+nLen));
+    }
+    o += eLen;
+  }
+  return null;
+}
+
+// ── State ─────────────────────────────────────────────────────────────────────
+let pcapState = { current:null, packets:[], filtered:[], selected:null };
+let _pcapVsW  = { start:-1, end:-1, sel:-1 };
+const PCAP_ROW_H = 22;
+const PCAP_PROTO_COLOR = {
+  TLS:'#bc8cff', DTLS:'#bc8cff', 'DTLS/IPsec':'#f85149',
+  DNS:'#56d364', HTTP:'#ffa657', HTTPS:'#ffa657',
+  TCP:'#3fb950', UDP:'#d2a8ff',
+  ICMP:'#e3b341', ICMPv6:'#e3b341', ARP:'#8b949e', SSH:'#79c0ff',
+};
+
+// ── Render ────────────────────────────────────────────────────────────────────
+function renderPcapTab() {
+  const list = document.getElementById('pcap-sidebar-list');
+  if (!list) return;
+  const files = Object.keys(state.pcaps || {});
+  const badge = document.getElementById('tab-pcap-count');
+
+  if (!files.length) {
+    list.innerHTML = '';
+    if (badge) { badge.style.display='none'; }
+    document.getElementById('pcap-drop-zone').style.display = 'flex';
+    document.getElementById('pcap-main').style.display = 'none';
+    return;
+  }
+
+  if (badge) { badge.textContent=files.length; badge.style.display=''; }
+  document.getElementById('pcap-drop-zone').style.display = 'none';
+  document.getElementById('pcap-main').style.display = 'flex';
+
+  list.innerHTML = files.map(f =>
+    `<div class="pcap-file-item${pcapState.current===f?' active':''}" onclick="pcapLoad('${f}')">
+       <span class="pcap-fname">${cfEsc(f)}</span>
+       <span class="pcap-fsize">${cfFmtSize(state.pcaps[f].byteLength)}</span>
+     </div>`
+  ).join('');
+
+  if (!pcapState.current && files.length) pcapLoad(files[0]);
+  else if (pcapState.current) pcapLoad(pcapState.current);
+}
+
+function pcapLoad(filename) {
+  const ab = state.pcaps[filename];
+  if (!ab) return;
+  pcapState.current = filename;
+  pcapState.selected = null;
+  _pcapVsW = { start:-1, end:-1, sel:-1 };
+
+  document.querySelectorAll('.pcap-file-item').forEach(el =>
+    el.classList.toggle('active', el.querySelector('.pcap-fname')?.textContent === filename));
+
+  const filterEl = document.getElementById('pcap-filter');
+  if (filterEl) filterEl.value = '';
+
+  const parsed = pcapParse(ab);
+  if (!parsed || !parsed.packets.length) {
+    document.getElementById('pcap-list').innerHTML =
+      '<div style="padding:20px;color:var(--muted)">No packets found or unrecognised format.</div>';
+    return;
+  }
+
+  const baseTs = parsed.packets[0].tsSec + parsed.packets[0].tsUsec/1e6;
+  pcapState.packets  = parsed.packets.map((m,i) => pcapDecodePacket(parsed, m, i, baseTs));
+  pcapState.filtered = pcapState.packets.map((_,i) => i);
+
+  const cntEl = document.getElementById('pcap-count');
+  if (cntEl) cntEl.textContent = `${pcapState.packets.length.toLocaleString()} packets`;
+
+  const det = document.getElementById('pcap-detail');
+  if (det) det.style.display = 'none';
+
+  pcapVsRender(true);
+  pcapInitResizer();
+}
+
+function pcapVsRender(reset) {
+  const wrap = document.getElementById('pcap-list');
+  if (!wrap) return;
+  if (reset) { wrap.scrollTop = 0; _pcapVsW = { start:-1, end:-1, sel:-1 }; }
+
+  const total = pcapState.filtered.length;
+  const scrollTop = wrap.scrollTop, visH = wrap.clientHeight || 500;
+  const startIdx = Math.max(0, Math.floor(scrollTop / PCAP_ROW_H) - 15);
+  const endIdx   = Math.min(total-1, Math.ceil((scrollTop + visH) / PCAP_ROW_H) + 15);
+
+  if (!reset && startIdx === _pcapVsW.start && endIdx === _pcapVsW.end && pcapState.selected === _pcapVsW.sel) return;
+  _pcapVsW = { start:startIdx, end:endIdx, sel:pcapState.selected };
+
+  const topPad = startIdx * PCAP_ROW_H;
+  const botPad = Math.max(0, (total - endIdx - 1) * PCAP_ROW_H);
+  let html = `<div style="height:${topPad}px"></div>`;
+  for (let i = startIdx; i <= endIdx; i++) {
+    const pidx = pcapState.filtered[i];
+    if (pidx === undefined) continue;
+    html += pcapRowHtml(pcapState.packets[pidx], pidx === pcapState.selected);
+  }
+  html += `<div style="height:${botPad}px"></div>`;
+  wrap.innerHTML = html;
+}
+
+function pcapRowHtml(pkt, selected) {
+  const color = PCAP_PROTO_COLOR[pkt.protocol] || '#8b949e';
+  const src = pkt.srcPort != null ? `${pkt.srcIP}:${pkt.srcPort}` : (pkt.srcIP || '—');
+  const dst = pkt.dstPort != null ? `${pkt.dstIP}:${pkt.dstPort}` : (pkt.dstIP || '—');
+  const ts  = pkt.ts < 100 ? pkt.ts.toFixed(6) : pkt.ts.toFixed(3);
+  return `<div class="pcap-row${selected?' selected':''}" style="height:${PCAP_ROW_H}px" onclick="pcapSelectPacket(${pkt.num-1})">
+    <span class="pcc-num">${pkt.num}</span>
+    <span class="pcc-time">${ts}</span>
+    <span class="pcc-src" title="${cfEsc(src)}">${cfEsc(src)}</span>
+    <span class="pcc-arr">→</span>
+    <span class="pcc-dst" title="${cfEsc(dst)}">${cfEsc(dst)}</span>
+    <span class="pcc-proto" style="color:${color}">${cfEsc(pkt.protocol)}</span>
+    <span class="pcc-len">${pkt.length}</span>
+    <span class="pcc-info" title="${cfEsc(pkt.info)}">${cfEsc(pkt.info)}</span>
+  </div>`;
+}
+
+function pcapSelectPacket(idx) {
+  pcapState.selected = idx;
+  _pcapVsW = { start:-1, end:-1, sel:-1 };
+  pcapVsRender(false);
+
+  const pkt = pcapState.packets[idx];
+  if (!pkt) return;
+
+  const detail = document.getElementById('pcap-detail');
+  if (detail) detail.style.display = 'flex';
+
+  // Layer tree
+  let treeHtml = '';
+  for (const layer of pkt.layers) {
+    treeHtml += `<div class="pcap-layer">
+      <div class="pcap-layer-name" style="color:${layer.color||'#8b949e'}">${cfEsc(layer.name)}</div>
+      <div>`;
+    for (const [k, v] of layer.fields)
+      treeHtml += `<div class="pcap-field"><span class="pcap-fk">${cfEsc(k)}:</span> <span class="pcap-fv">${cfEsc(String(v))}</span></div>`;
+    treeHtml += `</div></div>`;
+  }
+  if (!treeHtml) treeHtml = `<div style="color:var(--muted);font-size:11px;padding:4px">No decoded layers</div>`;
+  document.getElementById('pcap-tree-wrap').innerHTML = treeHtml;
+
+  // Hex dump
+  const b = pkt.bytes;
+  let hexLines = '';
+  for (let i = 0; i < b.length; i += 16) {
+    const chunk = b.slice(i, i+16);
+    const off  = i.toString(16).padStart(4,'0');
+    const hex  = Array.from(chunk).map(x=>x.toString(16).padStart(2,'0')).join(' ').padEnd(47,' ');
+    const asc  = Array.from(chunk).map(x=>x>=0x20&&x<0x7f?String.fromCharCode(x):'.').join('');
+    hexLines += `<span class="pcap-hex-off">${off}</span>  ${cfEsc(hex)}  <span class="pcap-hex-ascii">${cfEsc(asc)}</span>\n`;
+  }
+  document.getElementById('pcap-hex-wrap').innerHTML = `<pre class="pcap-hex">${hexLines}</pre>`;
+}
+
+function pcapFilter(q) {
+  const lq = q.toLowerCase();
+  pcapState.filtered = pcapState.packets.map((_,i)=>i).filter(i => {
+    if (!lq) return true;
+    const p = pcapState.packets[i];
+    return p.srcIP.includes(lq) || p.dstIP.includes(lq) ||
+           p.protocol.toLowerCase().includes(lq) ||
+           p.info.toLowerCase().includes(lq) ||
+           (p.srcPort!=null && String(p.srcPort).includes(lq)) ||
+           (p.dstPort!=null && String(p.dstPort).includes(lq));
+  });
+  const cntEl = document.getElementById('pcap-count');
+  if (cntEl) cntEl.textContent = lq
+    ? `${pcapState.filtered.length.toLocaleString()} / ${pcapState.packets.length.toLocaleString()} packets`
+    : `${pcapState.packets.length.toLocaleString()} packets`;
+  pcapVsRender(true);
+}
+
+function pcapHandleDrop(e) {
+  e.preventDefault(); e.stopPropagation();
+  const file = Array.from(e.dataTransfer.files).find(f => /\.(pcap|pcapng)$/i.test(f.name));
+  if (!file) return;
+  file.arrayBuffer().then(ab => {
+    if (!state.pcaps) state.pcaps = {};
+    state.pcaps[file.name] = ab;
+    renderPcapTab();
+  });
+}
+
+// Resizable detail pane
+function pcapInitResizer() {
+  const resizer = document.getElementById('pcap-resizer');
+  const detail  = document.getElementById('pcap-detail');
+  if (!resizer || !detail) return;
+  let startY, startH;
+  resizer.onmousedown = e => {
+    startY = e.clientY; startH = detail.offsetHeight;
+    document.onmousemove = ev => {
+      const h = Math.max(120, Math.min(600, startH - (ev.clientY - startY)));
+      detail.style.height = h + 'px';
+    };
+    document.onmouseup = () => { document.onmousemove = null; document.onmouseup = null; };
+  };
 }
 
 // ─── Drag & drop ──────────────────────────────────────────────────────────────
