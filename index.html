@@ -874,8 +874,7 @@ body {
   <div class="tab" data-tab="gslb">🌐 GSLB</div>
   <div class="tab" data-tab="npa">🔒 NPA</div>
   <div class="tab" data-tab="aidiscovery">🤖 AI Discovery</div>
-  <div class="tab" data-tab="flowlineage">🗺️ Flow Lineage</div>
-  <div class="tab" data-tab="flowpath" data-beta="true">⚡ Flow Path <span style="font-size:9px;background:#bc8cff33;color:#bc8cff;border:1px solid #bc8cff55;border-radius:3px;padding:1px 4px;vertical-align:middle;font-weight:700">BETA</span></div>
+  <div class="tab" data-tab="flowpath">⚡ Flow Path</div>
   <div class="tab" data-tab="timeline" data-beta="true">📈 Timeline <span style="font-size:9px;background:#3fb95033;color:#3fb950;border:1px solid #3fb95055;border-radius:3px;padding:1px 4px;vertical-align:middle;font-weight:700">BETA</span></div>
   <div class="tab" data-tab="pcap">🔬 PCAP <span class="tab-badge info" id="tab-pcap-count" style="display:none">0</span></div>
   <div class="tab" data-tab="configfiles">⚙️ Config Files <span class="tab-badge info" id="tab-config-count">0</span></div>
@@ -1008,12 +1007,7 @@ body {
     <div style="flex:1;overflow-y:auto;padding:16px" id="aidiscovery-content"></div>
   </div>
 
-  <!-- Flow Lineage -->
-  <div class="tab-panel" id="panel-flowlineage">
-    <div style="flex:1;overflow:hidden;display:flex;flex-direction:column" id="flow-lineage-content"></div>
-  </div>
-
-  <!-- Flow Path (Beta) -->
+  <!-- Flow Path -->
   <div class="tab-panel" id="panel-flowpath">
     <div style="flex:1;overflow:hidden;display:flex;flex-direction:column" id="flow-path-content"></div>
   </div>
@@ -1139,7 +1133,7 @@ body {
 
 <script>
 // ─── Version ─────────────────────────────────────────────────────────────────
-const TOOL_VERSION = '1.13.1';
+const TOOL_VERSION = '1.14.0';
 
 // ─── State ────────────────────────────────────────────────────────────────────
 const state = {
@@ -1856,7 +1850,6 @@ function renderAll() {
   renderSysInfo();
   renderTraffic();
   renderGSLB();
-  renderFlowLineage();
   renderFlowPath();
   renderNPA();
   renderAiDiscovery();
@@ -9808,23 +9801,9 @@ function buildSeverityChartSVG(allLogs) {
   </div>`;
 }
 
-// ─── Traffic Flow Lineage ─────────────────────────────────────────────────────
+// ─── Flow Path ─────────────────────────────────────────────────────────────────
 
-const FL_COL_W = 240;
-const FL_ROW_H = 82;
-const FL_PAD_X = 70;
-const FL_PAD_Y = 50;
-const FL_NODE_W = 172;
-const FL_NODE_H = 58;
-
-let flState = {
-  groups: [], filteredGroups: [], selectedGroupIdx: 0, selectedNodeId: null,
-  panX: 0, panY: 0, scale: 1,
-  isDragging: false, startX: 0, startY: 0, startPanX: 0, startPanY: 0,
-  searchQuery: '', showFilter: 'all', showDest: 'both', animEnabled: true, initialized: false,
-  evBindDone: false
-};
-
+// ── Shared path utilities ───────────────────────────────────────────────────────
 function flExtractDomain(host) {
   if (!host) return 'unknown';
   if (/^\d{1,3}(\.\d{1,3}){3}(:\d+)?$/.test(host)) return host.split(':')[0];
@@ -9836,982 +9815,6 @@ function flExtractDomain(host) {
   return parts.slice(-2).join('.');
 }
 
-function flBuildGroups() {
-  const { events = [], hosts = {} } = state.traffic || {};
-  const groupMap = {};
-
-  for (const [host, hd] of Object.entries(hosts)) {
-    const domain = flExtractDomain(host);
-    if (!groupMap[domain]) {
-      groupMap[domain] = { domain, hosts: {}, procMap: {}, steered: 0, bypassed: 0, events: [], firstSeen: null, lastSeen: null };
-    }
-    const g = groupMap[domain];
-    g.hosts[host] = { steered: hd.steered, bypassed: hd.bypassed, processes: [...hd.processes] };
-    g.steered += hd.steered;
-    g.bypassed += hd.bypassed;
-    for (const proc of hd.processes) {
-      if (!g.procMap[proc]) g.procMap[proc] = { steered: 0, bypassed: 0, hosts: new Set() };
-      g.procMap[proc].hosts.add(host);
-    }
-  }
-
-  for (const ev of events) {
-    const domain = flExtractDomain(ev.host);
-    if (!groupMap[domain]) continue;
-    const g = groupMap[domain];
-    g.events.push(ev);
-    if (ev.ts) {
-      if (!g.firstSeen || ev.ts < g.firstSeen) g.firstSeen = ev.ts;
-      if (!g.lastSeen  || ev.ts > g.lastSeen)  g.lastSeen  = ev.ts;
-    }
-    const pm = g.procMap[ev.process];
-    if (pm) { if (ev.type === 'tunnel') pm.steered++; else pm.bypassed++; }
-  }
-
-  return Object.values(groupMap).sort((a,b) => (b.steered+b.bypassed) - (a.steered+a.bypassed));
-}
-
-function renderAiDiscovery() {
-  const container = document.getElementById('aidiscovery-content');
-  if (!container) return;
-
-  if (!state.aiDiscovery) {
-    container.innerHTML = `<div style="padding:60px 20px;text-align:center;color:var(--muted)">
-      <div style="font-size:52px;margin-bottom:14px;opacity:.5">🤖</div>
-      <div style="font-size:15px;font-weight:600;margin-bottom:8px;color:var(--text)">No AI Discovery data</div>
-      <div style="font-size:12px;line-height:1.7">Upload a log bundle containing <code style="font-family:monospace;background:var(--bg3);padding:1px 5px;border-radius:3px">ai_discovery_gef_debug.json</code> to see results.<br>Present in R141+ bundles when AI Discovery is enabled.</div>
-    </div>`;
-    return;
-  }
-
-  const aid = state.aiDiscovery;
-  const agents      = aid.ai_agents          || [];
-  const browserExts = aid.browser_extensions || [];
-  const editorExts  = aid.editor_extensions  || [];
-  const llmServers  = aid.llm_servers        || [];
-  const sigVer      = aid.ai_signature_version || '0';
-
-  // Per-type color + label
-  const SID_META = {
-    '10000001': { color: '#58a6ff', label: 'MCP Config',       icon: '⚙️',  desc: 'Claude Desktop / Windsurf' },
-    '10000002': { color: '#58a6ff', label: 'MCP Config',       icon: '⚙️',  desc: 'Alternate client' },
-    '10000004': { color: '#f0883e', label: 'Native App',       icon: '🖥️',  desc: 'Running AI application' },
-    '20000001': { color: '#3fb950', label: 'Local LLM',        icon: '🧠',  desc: 'Local model server' },
-    '30000001': { color: '#bc8cff', label: 'Editor Extension', icon: '🖊️', desc: 'AI-enabled editor' },
-  };
-
-  const ts2str  = ts => ts ? new Date(ts * 1000).toLocaleString() : '—';
-  const totalExtCount       = browserExts.reduce((s, b) => s + (b.profiles||[]).reduce((ps, p) => ps + (p.extensions||[]).length, 0), 0);
-  const totalEditorExtCount = editorExts.reduce((s, e) => s + (e.extensions||[]).length, 0);
-
-  // ── Helpers ───────────────────────────────────────────────────────────────
-  const sectionHdr = (icon, title, count) =>
-    `<div style="display:flex;align-items:center;gap:8px;margin:24px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--border)">
-       <span style="font-size:16px">${icon}</span>
-       <span style="font-size:13px;font-weight:700;color:var(--text)">${esc(title)}</span>
-       ${count != null ? `<span style="font-size:11px;background:var(--bg3);color:var(--muted);border:1px solid var(--border);border-radius:10px;padding:0 7px;line-height:18px">${count}</span>` : ''}
-     </div>`;
-
-  const tblHdr = cols =>
-    `<div style="display:grid;grid-template-columns:${cols};gap:0;background:var(--bg3);border-radius:6px 6px 0 0;border:1px solid var(--border);border-bottom:none">`;
-  const tblCell = (txt, mono) =>
-    `<span style="padding:6px 10px;font-size:11px;font-weight:600;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${txt}</span>`;
-  const tblRow = (cols, content, last, extraStyle) =>
-    `<div style="display:grid;grid-template-columns:${cols};gap:0;border:1px solid var(--border);${last?'border-radius:0 0 6px 6px':'border-bottom:none'};${extraStyle||''}">
-       ${content}
-     </div>`;
-  const tblVal = (txt, mono, muted, color) =>
-    `<span style="padding:6px 10px;font-size:12px;${mono?'font-family:monospace;':''}${muted?'color:var(--muted);':'color:var(--text);'}${color?`color:${color};`:''}white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(txt)}">${esc(txt)}</span>`;
-
-  // ── Stat tiles ─────────────────────────────────────────────────────────────
-  const tiles = [
-    { label: 'AI Agents',        val: agents.length,         color: '#58a6ff' },
-    { label: 'Browser Exts',     val: totalExtCount,          color: '#f0883e' },
-    { label: 'Editor Exts',      val: totalEditorExtCount,    color: '#bc8cff' },
-    { label: 'Local LLM Servers',val: llmServers.length,      color: '#3fb950' },
-  ];
-  let html = `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:4px">`;
-  for (const t of tiles) {
-    html += `<div style="background:var(--bg2);border:1px solid var(--border);border-top:3px solid ${t.color};border-radius:6px;padding:12px 16px">
-      <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">${t.label}</div>
-      <div style="font-size:28px;font-weight:700;color:${t.color};line-height:1">${t.val}</div>
-    </div>`;
-  }
-  // Signature tile
-  const sigOk  = sigVer !== '0';
-  const sigCol  = sigOk ? '#3fb950' : '#f0883e';
-  const sigText = sigOk ? `v${esc(sigVer)}` : 'Not downloaded';
-  html += `<div style="background:var(--bg2);border:1px solid var(--border);border-top:3px solid ${sigCol};border-radius:6px;padding:12px 16px">
-    <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">AI Signatures</div>
-    <div style="display:flex;align-items:center;gap:6px;margin-top:4px">
-      <span style="width:8px;height:8px;border-radius:50%;background:${sigCol};flex-shrink:0"></span>
-      <span style="font-size:12px;font-weight:600;color:${sigCol}">${sigText}</span>
-    </div>
-  </div>`;
-  html += `</div>`;
-
-  // ── AI Agents ──────────────────────────────────────────────────────────────
-  if (agents.length) {
-    html += sectionHdr('🤖', 'AI Agents', agents.length);
-    for (const agent of agents) {
-      const sysId    = String(agent.system_id || '');
-      const meta     = SID_META[sysId] || { color: '#8b949e', label: `ID ${sysId}`, icon: '?', desc: '' };
-      const scanTime = ts2str(agent.timestamp);
-      const mcpServers = agent.mcp_servers || [];
-      const pi         = agent.process_info;
-
-      html += `<div style="background:var(--bg2);border:1px solid var(--border);border-left:3px solid ${meta.color};border-radius:0 6px 6px 0;margin-bottom:10px;overflow:hidden">`;
-
-      // Card header
-      html += `<div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--bg3);border-bottom:1px solid var(--border)">
-        <span style="font-size:16px">${meta.icon}</span>
-        <div style="flex:1;min-width:0">
-          <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap">
-            <span style="font-size:12px;font-weight:700;color:${meta.color}">${esc(meta.label)}</span>
-            <span style="font-size:11px;color:var(--muted)">${esc(meta.desc)}</span>
-            <span style="font-family:monospace;font-size:10px;color:var(--muted);background:var(--bg);border:1px solid var(--border);border-radius:3px;padding:0 5px">${esc(sysId)}</span>
-          </div>
-        </div>
-        <span style="font-size:10px;color:var(--muted);flex-shrink:0">${esc(scanTime)}</span>
-      </div>`;
-
-      // Process info (native apps)
-      if (pi) {
-        html += `<div style="padding:8px 14px;border-bottom:${mcpServers.length ? '1px solid var(--border)' : 'none'};display:flex;gap:16px;flex-wrap:wrap;align-items:baseline">
-          <span style="font-size:11px;color:var(--muted)">Process</span>
-          <span style="font-size:12px;font-weight:600;color:var(--text)">${esc(pi.pname || '—')}</span>
-          ${pi.ppname ? `<span style="font-size:11px;color:var(--muted)">Parent: <span style="color:var(--text);font-family:monospace">${esc(pi.ppname)}</span></span>` : ''}
-          ${pi.bin_path ? `<span style="font-size:11px;color:var(--muted);font-family:monospace;word-break:break-all">${esc(pi.bin_path)}</span>` : ''}
-        </div>`;
-      }
-
-      // MCP servers table
-      if (mcpServers.length) {
-        const cols = '130px 1fr 1fr';
-        html += `<div style="overflow-x:auto">`;
-        html += `<div style="display:grid;grid-template-columns:${cols};min-width:420px;background:var(--bg3);border-top:1px solid var(--border)">
-          ${tblCell('Name')}${tblCell('Package')}${tblCell('Scoped Path')}
-        </div>`;
-        mcpServers.forEach((srv, i) => {
-          const pkg    = esc(srv.resolved_package || srv.command || '—');
-          const fsArgs = (srv.args || []).filter(a => typeof a === 'string' && a.startsWith('/'));
-          const isFsSrv = /server-filesystem/i.test(srv.resolved_package || '');
-          const pathVal  = isFsSrv && fsArgs.length ? fsArgs.join(', ') : '—';
-          const pathColor = isFsSrv && fsArgs.length ? '#e6edf3' : null;
-          const isLast = i === mcpServers.length - 1;
-          html += `<div style="display:grid;grid-template-columns:${cols};min-width:420px;border-top:1px solid var(--border)${isLast ? ';border-radius:0 0 0 0' : ''}">
-            <span style="padding:7px 10px;font-size:12px;font-weight:600;color:var(--text);border-right:1px solid var(--border)">${esc(srv.name || '—')}</span>
-            <span style="padding:7px 10px;font-size:11px;color:var(--muted);font-family:monospace;border-right:1px solid var(--border);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${pkg}">${pkg}</span>
-            <span style="padding:7px 10px;font-size:11px;${isFsSrv && fsArgs.length ? 'color:var(--text)' : 'color:var(--muted)'};font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(pathVal)}">${esc(pathVal)}</span>
-          </div>`;
-        });
-        html += `</div>`;
-      }
-
-      html += `</div>`;
-    }
-  }
-
-  // ── Browser Extensions ────────────────────────────────────────────────────
-  const allBrowserRows = [];
-  for (const b of browserExts) {
-    for (const p of (b.profiles || [])) {
-      for (const ext of (p.extensions || [])) {
-        allBrowserRows.push({ browser: b.browser || '—', profile: p.profile || '—', name: ext.name || '—', version: ext.version || '?' });
-      }
-    }
-  }
-  if (allBrowserRows.length) {
-    html += sectionHdr('🌐', 'Browser Extensions', allBrowserRows.length);
-    const cols = '1fr 160px 160px 90px';
-    html += `<div style="overflow-x:auto;border-radius:6px;border:1px solid var(--border)">`;
-    html += `<div style="display:grid;grid-template-columns:${cols};min-width:520px;background:var(--bg3);border-radius:5px 5px 0 0;border-bottom:1px solid var(--border)">
-      ${tblCell('Extension')}${tblCell('Browser')}${tblCell('Profile')}${tblCell('Version')}
-    </div>`;
-    allBrowserRows.forEach((r, i) => {
-      const isLast = i === allBrowserRows.length - 1;
-      html += `<div style="display:grid;grid-template-columns:${cols};min-width:520px;border-bottom:${isLast ? 'none' : '1px solid var(--border)'}">
-        <span style="padding:7px 10px;font-size:12px;font-weight:600;color:var(--text);border-right:1px solid var(--border)">${esc(r.name)}</span>
-        <span style="padding:7px 10px;font-size:12px;color:var(--muted);text-transform:capitalize;border-right:1px solid var(--border)">${esc(r.browser)}</span>
-        <span style="padding:7px 10px;font-size:12px;color:var(--muted);border-right:1px solid var(--border);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(r.profile)}">${esc(r.profile)}</span>
-        <span style="padding:7px 10px;font-size:11px;color:var(--muted);font-family:monospace">${esc(r.version)}</span>
-      </div>`;
-    });
-    html += `</div>`;
-  }
-
-  // ── Editor Extensions ──────────────────────────────────────────────────────
-  const allEditorRows = [];
-  for (const e of editorExts) {
-    for (const ext of (e.extensions || [])) {
-      allEditorRows.push({ editor: e.editor || '—', name: ext.name || '—', publisher: ext.publisher || '—', version: ext.version || '?' });
-    }
-  }
-  if (allEditorRows.length) {
-    html += sectionHdr('🖊️', 'Editor Extensions', allEditorRows.length);
-    const cols = '120px 1fr 160px 90px';
-    html += `<div style="overflow-x:auto;border-radius:6px;border:1px solid var(--border)">`;
-    html += `<div style="display:grid;grid-template-columns:${cols};min-width:480px;background:var(--bg3);border-radius:5px 5px 0 0;border-bottom:1px solid var(--border)">
-      ${tblCell('Editor')}${tblCell('Extension')}${tblCell('Publisher')}${tblCell('Version')}
-    </div>`;
-    allEditorRows.forEach((r, i) => {
-      const isLast = i === allEditorRows.length - 1;
-      html += `<div style="display:grid;grid-template-columns:${cols};min-width:480px;border-bottom:${isLast ? 'none' : '1px solid var(--border)'}">
-        <span style="padding:7px 10px;font-size:12px;font-weight:600;color:#bc8cff;text-transform:capitalize;border-right:1px solid var(--border)">${esc(r.editor)}</span>
-        <span style="padding:7px 10px;font-size:12px;color:var(--text);border-right:1px solid var(--border)">${esc(r.name)}</span>
-        <span style="padding:7px 10px;font-size:12px;color:var(--muted);border-right:1px solid var(--border)">${esc(r.publisher)}</span>
-        <span style="padding:7px 10px;font-size:11px;color:var(--muted);font-family:monospace">${esc(r.version)}</span>
-      </div>`;
-    });
-    html += `</div>`;
-  }
-
-  // ── Local LLM Servers ─────────────────────────────────────────────────────
-  if (llmServers.length) {
-    html += sectionHdr('🧠', 'Local LLM Servers', llmServers.length);
-    for (const srv of llmServers) {
-      const pi  = srv.process_info || {};
-      const net = srv.network || {};
-      const models = srv.models || [];
-      const endpoint = `${net.host || '?'}:${net.listen_port || '?'}`;
-
-      html += `<div style="background:var(--bg2);border:1px solid var(--border);border-left:3px solid #3fb950;border-radius:0 6px 6px 0;margin-bottom:10px;overflow:hidden">`;
-
-      // Server header
-      html += `<div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--bg3);border-bottom:1px solid var(--border)">
-        <span style="width:8px;height:8px;border-radius:50%;background:#3fb950;flex-shrink:0"></span>
-        <span style="font-size:13px;font-weight:700;color:var(--text)">${esc(pi.pname || 'LLM Server')}</span>
-        <span style="font-size:11px;color:var(--muted);font-family:monospace">${esc(endpoint)}</span>
-        ${pi.bin_path ? `<span style="font-size:10px;color:var(--muted);font-family:monospace;margin-left:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(pi.bin_path)}">${esc(pi.bin_path)}</span>` : ''}
-      </div>`;
-
-      // Models table
-      if (models.length) {
-        const cols = '1fr 90px 90px 80px';
-        html += `<div style="overflow-x:auto">`;
-        html += `<div style="display:grid;grid-template-columns:${cols};min-width:380px;background:var(--bg3);border-bottom:1px solid var(--border)">
-          ${tblCell('Model')}${tblCell('Parameters')}${tblCell('Quant')}${tblCell('Size')}
-        </div>`;
-        models.forEach((m, i) => {
-          const sizeGb = m.size ? (m.size / 1e9).toFixed(1) + ' GB' : '—';
-          const isLast = i === models.length - 1;
-          html += `<div style="display:grid;grid-template-columns:${cols};min-width:380px;border-bottom:${isLast ? 'none' : '1px solid var(--border)'}">
-            <span style="padding:7px 10px;font-size:12px;font-weight:600;color:var(--text);font-family:monospace;border-right:1px solid var(--border)">${esc(m.name || '—')}</span>
-            <span style="padding:7px 10px;font-size:11px;color:var(--muted);border-right:1px solid var(--border)">${esc(m.parameter_size || '—')}</span>
-            <span style="padding:7px 10px;font-size:11px;color:var(--muted);font-family:monospace;border-right:1px solid var(--border)">${esc(m.quantization || '—')}</span>
-            <span style="padding:7px 10px;font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums">${esc(sizeGb)}</span>
-          </div>`;
-        });
-        html += `</div>`;
-      }
-
-      html += `</div>`;
-    }
-  }
-
-  // trailing padding
-  html += `<div style="height:20px"></div>`;
-  container.innerHTML = html;
-}
-
-function renderFlowLineage() {
-  const panel = document.getElementById('flow-lineage-content');
-  if (!panel) return;
-  flState.groups = flBuildGroups();
-  flState.filteredGroups = flState.groups.slice();
-  flState.selectedGroupIdx = 0;
-  flState.initialized = true;
-
-  if (!flState.groups.length) {
-    panel.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--muted);flex-direction:column;gap:16px">
-      <div style="font-size:48px;opacity:0.25">🗺️</div>
-      <div style="font-size:13px">No traffic data. Load a ZIP containing nsdebuglog.log.</div></div>`;
-    return;
-  }
-
-  panel.innerHTML = flShellHTML();
-  if (!flState.evBindDone) { flBindCanvasEvents(); flState.evBindDone = false; }
-  flBindCanvasEvents();
-  flRenderGroupList();
-  flSelectGroup(0);
-}
-
-function flShellHTML() {
-  return `
-<div id="fl-wrap" style="display:flex;height:100%;overflow:hidden;background:var(--bg0)">
-
-  <!-- LEFT: group sidebar -->
-  <div id="fl-sidebar" style="width:250px;min-width:200px;border-right:1px solid var(--border);display:flex;flex-direction:column;background:var(--bg1);flex-shrink:0">
-    <div style="padding:10px 12px;border-bottom:1px solid var(--border)">
-      <div style="font-size:10px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-bottom:6px">Flow Groups</div>
-      <input id="fl-search" class="search-box" placeholder="Search domain or IP…" oninput="flFilterGroups(this.value)"
-        style="width:100%;box-sizing:border-box;font-size:11px;margin-bottom:6px">
-      <div id="fl-filter-traffic" style="display:flex;gap:3px;flex-wrap:wrap;margin-bottom:3px">
-        <button class="fl-fbtn active" data-g="traffic" data-f="all"      onclick="flSetFilter('all',this)">All</button>
-        <button class="fl-fbtn"        data-g="traffic" data-f="steered"  onclick="flSetFilter('steered',this)">Steered</button>
-        <button class="fl-fbtn"        data-g="traffic" data-f="bypassed" onclick="flSetFilter('bypassed',this)">Bypassed</button>
-        <button class="fl-fbtn"        data-g="traffic" data-f="mixed"    onclick="flSetFilter('mixed',this)">Mixed</button>
-      </div>
-      <div id="fl-filter-dest" style="display:flex;gap:3px;flex-wrap:wrap">
-        <button class="fl-fbtn active" data-g="dest" data-f="both"    onclick="flSetDest('both',this)">Both</button>
-        <button class="fl-fbtn"        data-g="dest" data-f="domain"  onclick="flSetDest('domain',this)">Domain</button>
-        <button class="fl-fbtn"        data-g="dest" data-f="process" onclick="flSetDest('process',this)">Process</button>
-      </div>
-    </div>
-    <div id="fl-group-list" style="flex:1;overflow-y:auto"></div>
-  </div>
-
-  <!-- CENTER: graph canvas -->
-  <div id="fl-center" style="flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0">
-
-    <!-- toolbar -->
-    <div style="padding:6px 12px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;background:var(--bg1);flex-shrink:0;flex-wrap:wrap">
-      <div id="fl-title" style="font-size:12px;font-weight:600;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></div>
-      <div style="display:flex;gap:4px;align-items:center">
-        <button class="fl-cbtn" onclick="flZoom(0.15)" title="Zoom in">+</button>
-        <button class="fl-cbtn" onclick="flZoom(-0.15)" title="Zoom out">−</button>
-        <button class="fl-cbtn" onclick="flResetView()" title="Fit view">⊞</button>
-        <button class="fl-cbtn" id="fl-anim-btn" onclick="flToggleAnim()" title="Pause animation">⏸</button>
-      </div>
-      <div style="display:flex;gap:8px;font-size:10px;color:var(--muted)">
-        <span><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:#3fb950;margin-right:3px;vertical-align:middle"></span>Steered</span>
-        <span><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:#d29922;margin-right:3px;vertical-align:middle"></span>Bypassed</span>
-        <span><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:#58a6ff;margin-right:3px;vertical-align:middle"></span>Mixed</span>
-      </div>
-    </div>
-
-    <!-- SVG canvas -->
-    <div id="fl-canvas" style="flex:1;position:relative;overflow:hidden;cursor:grab;background:var(--bg0)">
-      <div id="fl-gw" style="position:absolute;top:0;left:0;transform-origin:0 0">
-        <svg id="fl-svg" style="display:block;overflow:visible"></svg>
-      </div>
-
-      <!-- Minimap -->
-      <div style="position:absolute;bottom:12px;right:12px;background:var(--bg1);border:1px solid var(--border);border-radius:6px;overflow:hidden">
-        <svg id="fl-mm" width="150" height="90" style="display:block"></svg>
-        <div style="position:absolute;bottom:0;left:0;right:0;text-align:center;font-size:9px;color:var(--muted);padding:1px">minimap</div>
-      </div>
-
-      <!-- Scale badge -->
-      <div id="fl-scale" style="position:absolute;bottom:12px;left:12px;font-size:10px;color:var(--muted);background:var(--bg1);border:1px solid var(--border);padding:2px 7px;border-radius:4px">100%</div>
-
-      <!-- Node count badge -->
-      <div id="fl-count" style="position:absolute;top:10px;left:10px;font-size:10px;color:var(--muted);background:var(--bg1);border:1px solid var(--border);padding:2px 7px;border-radius:4px"></div>
-    </div>
-
-    <!-- Timeline strip -->
-    <div id="fl-timeline-wrap" style="height:72px;border-top:1px solid var(--border);background:var(--bg1);overflow-x:auto;flex-shrink:0;display:flex;align-items:center;padding:0 14px;gap:6px">
-      <div style="font-size:10px;color:var(--muted);flex-shrink:0">Events</div>
-      <div id="fl-timeline" style="display:flex;gap:2px;align-items:flex-end;height:48px;flex:1;overflow-x:auto"></div>
-    </div>
-  </div>
-
-  <!-- RIGHT: inspector -->
-  <div id="fl-inspector" style="width:270px;min-width:220px;border-left:1px solid var(--border);display:flex;flex-direction:column;background:var(--bg1);flex-shrink:0;overflow-y:auto"></div>
-</div>
-
-<style>
-.fl-fbtn{font-size:10px;padding:2px 8px;border-radius:3px;cursor:pointer;background:var(--bg3);color:var(--muted);border:1px solid var(--border);}
-.fl-fbtn.active{background:var(--primary);color:#fff;border-color:var(--primary);}
-.fl-fbtn:hover{color:var(--text);}
-.fl-cbtn{font-size:12px;padding:2px 8px;border-radius:4px;cursor:pointer;background:var(--bg2);color:var(--text);border:1px solid var(--border);}
-.fl-cbtn:hover{background:var(--bg3);}
-.fl-gi{padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--border);}
-.fl-gi:hover{background:var(--hover);}
-.fl-gi.sel{background:var(--bg3);border-left:2px solid var(--primary);padding-left:10px;}
-@keyframes fl-dash{to{stroke-dashoffset:-20}}
-.fl-anim{animation:fl-dash 0.7s linear infinite;}
-.fl-node-g{cursor:pointer;}
-.fl-node-g:hover rect.fl-nr{filter:brightness(1.25);}
-</style>`;
-}
-
-// ─── Group List ───────────────────────────────────────────────────────────────
-function flFilterGroups(q) {
-  flState.searchQuery = q.toLowerCase().trim();
-  flApplyFilters();
-}
-function flSetFilter(f, btn) {
-  flState.showFilter = f;
-  document.querySelectorAll('#fl-filter-traffic .fl-fbtn').forEach(b => b.classList.toggle('active', b.dataset.f === f));
-  flApplyFilters();
-}
-function flSetDest(d, btn) {
-  flState.showDest = d;
-  document.querySelectorAll('#fl-filter-dest .fl-fbtn').forEach(b => b.classList.toggle('active', b.dataset.f === d));
-  flApplyFilters();
-}
-function flApplyFilters() {
-  const { groups, searchQuery, showFilter, showDest } = flState;
-  const isIP = d => /^\d{1,3}(\.\d{1,3}){3}$/.test(d);
-  flState.filteredGroups = groups.filter(g => {
-    if (showFilter === 'steered'  && g.steered === 0) return false;
-    if (showFilter === 'bypassed' && g.bypassed === 0) return false;
-    if (showFilter === 'mixed'    && (g.steered === 0 || g.bypassed === 0)) return false;
-    if (showDest === 'domain'  && isIP(g.domain)) return false;
-    if (showDest === 'process' && Object.keys(g.procMap).length === 0) return false;
-    if (searchQuery) {
-      const domainMatch = g.domain.includes(searchQuery);
-      const procMatch   = Object.keys(g.procMap).some(p => p.toLowerCase().includes(searchQuery));
-      if (!domainMatch && !procMatch) return false;
-    }
-    return true;
-  });
-  flRenderGroupList();
-  if (flState.filteredGroups.length) flSelectGroup(0);
-  else { flClearGraph(); flRenderInspector(null, null); }
-}
-
-function flRenderGroupList() {
-  const { filteredGroups, selectedGroupIdx, showDest } = flState;
-  const el = document.getElementById('fl-group-list');
-  if (!el) return;
-  const procMode = showDest === 'process';
-  el.innerHTML = filteredGroups.map((g, i) => {
-    const isMixed = g.steered > 0 && g.bypassed > 0;
-    const c = isMixed ? '#58a6ff' : g.bypassed > 0 ? '#d29922' : '#3fb950';
-    const sym = isMixed ? '◈' : g.bypassed > 0 ? '⚠' : '✓';
-    const procNames = Object.keys(g.procMap);
-    const procCount = procNames.length;
-    const hostCount = Object.keys(g.hosts).length;
-    let primaryLabel, primaryTitle, subLine;
-    if (procMode && procCount > 0) {
-      const shown = procNames.slice(0, 2).map(p => esc(p)).join(', ');
-      primaryLabel = shown + (procCount > 2 ? ` <span style="opacity:.5">+${procCount-2}</span>` : '');
-      primaryTitle = procNames.join(', ');
-      subLine = `<span title="${esc(g.domain)}">${esc(g.domain)}</span><span>·</span>
-        <span style="color:#3fb950">${g.steered}▲</span>
-        <span style="color:${g.bypassed>0?'#d29922':'var(--muted)'}">${g.bypassed}⚠</span>`;
-    } else {
-      primaryLabel = esc(g.domain);
-      primaryTitle = g.domain;
-      subLine = `<span>${procCount} app${procCount!==1?'s':''}</span><span>·</span>
-        <span>${hostCount} host${hostCount!==1?'s':''}</span><span>·</span>
-        <span style="color:#3fb950">${g.steered}▲</span>
-        <span style="color:${g.bypassed>0?'#d29922':'var(--muted)'}">${g.bypassed}⚠</span>`;
-    }
-    return `<div class="fl-gi ${i===selectedGroupIdx?'sel':''}" onclick="flSelectGroup(${i})">
-      <div style="display:flex;align-items:center;gap:5px;margin-bottom:2px">
-        <span style="color:${c};font-size:11px;flex-shrink:0">${sym}</span>
-        <span style="font-size:11px;font-weight:500;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${primaryTitle}">${primaryLabel}</span>
-      </div>
-      <div style="font-size:10px;color:var(--muted);display:flex;gap:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${subLine}</div>
-    </div>`;
-  }).join('');
-}
-
-function flSelectGroup(idx) {
-  flState.selectedGroupIdx = idx;
-  flState.selectedNodeId = null;
-  flState.panX = 40; flState.panY = 30; flState.scale = 1;
-  flRenderGroupList();
-  const g = flState.filteredGroups[idx];
-  if (!g) return;
-  flRenderGraph(g);
-  flRenderInspector(null, g);
-}
-
-function flClearGraph() {
-  const svg = document.getElementById('fl-svg');
-  if (svg) { svg.innerHTML = ''; svg.setAttribute('width','0'); svg.setAttribute('height','0'); }
-  const mm = document.getElementById('fl-mm');
-  if (mm) mm.innerHTML = '';
-  const tl = document.getElementById('fl-timeline');
-  if (tl) tl.innerHTML = '';
-}
-
-// ─── Graph Build ──────────────────────────────────────────────────────────────
-function flBuildNodes(group) {
-  const nodes = [];
-  const edges = [];
-  const id = state.identity || {};
-  const userLabel = id.upn || id.email || id.username || 'User Device';
-  const deviceSub = state.sysinfo?.['Host'] || state.sysinfo?.['Hostname'] || '';
-
-  // Col 0: User
-  nodes.push({ id:'user', type:'user', col:0, rowF:0,
-    label: userLabel.length>22 ? userLabel.slice(0,20)+'…' : userLabel,
-    fullLabel: userLabel, sub: deviceSub });
-
-  // Col 1: Processes (sorted by total desc)
-  const procs = Object.entries(group.procMap)
-    .sort((a,b)=>(b[1].steered+b[1].bypassed)-(a[1].steered+a[1].bypassed));
-  const maxProcs = 10;
-  const procSlice = procs.slice(0, maxProcs);
-
-  procSlice.forEach(([proc, pd], i) => {
-    const short = flShortProc(proc);
-    const hasSt = pd.steered > 0, hasByp = pd.bypassed > 0;
-    const status = hasSt && hasByp ? 'mixed' : hasSt ? 'steered' : 'bypassed';
-    nodes.push({ id:`proc_${i}`, type:'process', col:1, rowF:i,
-      label: short.length>20 ? short.slice(0,18)+'…' : short,
-      fullLabel: proc, status,
-      steered: pd.steered, bypassed: pd.bypassed,
-      hosts: [...pd.hosts], hasSt, hasByp });
-    edges.push({ from:'user', to:`proc_${i}`, type: status });
-  });
-
-  if (procs.length > maxProcs) {
-    const rest = procs.slice(maxProcs);
-    const rs = rest.reduce((acc,[,pd])=>({steered:acc.steered+pd.steered,bypassed:acc.bypassed+pd.bypassed}),{steered:0,bypassed:0});
-    nodes.push({ id:'proc_more', type:'more', col:1, rowF:maxProcs,
-      label:`+${rest.length} more apps`, sub:`${rs.steered+rs.bypassed} flows`,
-      status:'info', steered:rs.steered, bypassed:rs.bypassed });
-  }
-
-  // Col 2: Aggregated SASE + Bypass decision nodes
-  const hasSteeredAny  = procSlice.some(([,pd])=>pd.steered>0);
-  const hasBypassedAny = procSlice.some(([,pd])=>pd.bypassed>0);
-  const totalSteered  = procSlice.reduce((s,[,pd])=>s+pd.steered,0);
-  const totalBypassed = procSlice.reduce((s,[,pd])=>s+pd.bypassed,0);
-
-  // Y positions for col 2 nodes
-  const nProcs = procSlice.length + (procs.length > maxProcs ? 1 : 0);
-  const saseRowF = hasBypassedAny && hasSteeredAny ? (nProcs*0.5 - 1) : (nProcs-1)/2;
-  const bypassRowF = hasBypassedAny && hasSteeredAny ? (nProcs*0.5) : (nProcs-1)/2;
-
-  if (hasSteeredAny) {
-    nodes.push({ id:'sase', type:'sase', col:2, rowF: saseRowF,
-      label:'Netskope SASE', sub:`${totalSteered} steered flow${totalSteered!==1?'s':''}`,
-      status:'steered', total: totalSteered });
-    procSlice.forEach(([,pd],i) => {
-      if (pd.steered > 0)
-        edges.push({ from:`proc_${i}`, to:'sase', type:'steered', count: pd.steered });
-    });
-  }
-  if (hasBypassedAny) {
-    nodes.push({ id:'bypass', type:'bypass', col:2, rowF: bypassRowF,
-      label:'Direct Path', sub:`${totalBypassed} bypassed`,
-      status:'bypassed', total: totalBypassed });
-    procSlice.forEach(([,pd],i) => {
-      if (pd.bypassed > 0)
-        edges.push({ from:`proc_${i}`, to:'bypass', type:'bypassed', count: pd.bypassed });
-    });
-  }
-
-  // Col 3: Destination hosts (max 12 + overflow)
-  const destEntries = Object.entries(group.hosts)
-    .sort((a,b)=>(b[1].steered+b[1].bypassed)-(a[1].steered+a[1].bypassed));
-  const maxDest = 12;
-  destEntries.slice(0, maxDest).forEach(([host, hd], j) => {
-    const isMixed = hd.steered > 0 && hd.bypassed > 0;
-    const status = isMixed ? 'mixed' : hd.bypassed > 0 ? 'bypassed' : 'steered';
-    const short = host.length > 24 ? host.slice(0,22)+'…' : host;
-    nodes.push({ id:`dest_${j}`, type:'destination', col:3, rowF:j,
-      label: short, fullLabel: host, status,
-      steered: hd.steered, bypassed: hd.bypassed,
-      procs: hd.processes || [] });
-    if (hasSteeredAny && hd.steered > 0)
-      edges.push({ from:'sase', to:`dest_${j}`, type:'steered' });
-    if (hasBypassedAny && hd.bypassed > 0)
-      edges.push({ from:'bypass', to:`dest_${j}`, type:'bypassed' });
-  });
-
-  const remaining = destEntries.length - maxDest;
-  if (remaining > 0) {
-    const rs = destEntries.slice(maxDest).reduce((acc,[,hd])=>({steered:acc.steered+hd.steered,bypassed:acc.bypassed+hd.bypassed}),{steered:0,bypassed:0});
-    nodes.push({ id:'dest_more', type:'more', col:3, rowF: maxDest,
-      label:`+${remaining} more hosts`, sub:`${rs.steered+rs.bypassed} flows`,
-      status: rs.bypassed>0&&rs.steered>0?'mixed':rs.bypassed>0?'bypassed':'steered' });
-    if (hasSteeredAny  && rs.steered  > 0) edges.push({ from:'sase',   to:'dest_more', type:'steered'  });
-    if (hasBypassedAny && rs.bypassed > 0) edges.push({ from:'bypass', to:'dest_more', type:'bypassed' });
-  }
-
-  return { nodes, edges };
-}
-
-function flLayout(nodes) {
-  const COL_X = [FL_PAD_X, FL_PAD_X + FL_COL_W, FL_PAD_X + FL_COL_W*2, FL_PAD_X + FL_COL_W*3];
-  for (const n of nodes) {
-    n.x = COL_X[n.col];
-    n.y = FL_PAD_Y + n.rowF * FL_ROW_H;
-  }
-  // Center user node vertically to col-1 nodes
-  const col1 = nodes.filter(n=>n.col===1);
-  if (col1.length) {
-    const minY = Math.min(...col1.map(n=>n.y));
-    const maxY = Math.max(...col1.map(n=>n.y+FL_NODE_H));
-    const uNode = nodes.find(n=>n.id==='user');
-    if (uNode) uNode.y = (minY+maxY)/2 - FL_NODE_H/2;
-  }
-  const allYMax = Math.max(...nodes.map(n=>n.y+FL_NODE_H));
-  const svgW = FL_PAD_X*2 + FL_COL_W*3 + FL_NODE_W;
-  const svgH = allYMax + FL_PAD_Y;
-  return { svgW, svgH };
-}
-
-// ─── Graph Render ─────────────────────────────────────────────────────────────
-const FL_COLORS = { steered:'#3fb950', bypassed:'#d29922', mixed:'#58a6ff', info:'#6e7681' };
-const FL_BG = { user:'#0d2137', process:'#1c1c2e', sase:'#0d2118', bypass:'#231b00', destination:'#130d21', more:'#1a1a2e' };
-const FL_ICONS = { user:'👤', process:'🖥️', sase:'🛡️', bypass:'⚠️', destination:'☁️', more:'⋯' };
-
-function flRenderGraph(group) {
-  const titleEl = document.getElementById('fl-title');
-  if (titleEl) {
-    titleEl.innerHTML = `<span style="color:var(--text)">${esc(group.domain)}</span>
-      <span style="color:var(--muted);font-weight:400;font-size:11px;margin-left:8px">
-        ${Object.keys(group.procMap).length} apps · ${Object.keys(group.hosts).length} hosts ·
-        <span style="color:#3fb950">${group.steered} steered</span> ·
-        <span style="color:${group.bypassed?'#d29922':'var(--muted)'}">${group.bypassed} bypassed</span>
-      </span>`;
-  }
-
-  const { nodes, edges } = flBuildNodes(group);
-  const { svgW, svgH } = flLayout(nodes);
-  const nodeMap = {};
-  for (const n of nodes) nodeMap[n.id] = n;
-
-  let svg = `<defs>
-    <marker id="fl-arr-s" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L0,7 L7,3.5 z" fill="#3fb950" opacity="0.75"/></marker>
-    <marker id="fl-arr-b" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L0,7 L7,3.5 z" fill="#d29922" opacity="0.75"/></marker>
-    <marker id="fl-arr-m" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L0,7 L7,3.5 z" fill="#58a6ff" opacity="0.75"/></marker>
-    <marker id="fl-arr-i" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L0,7 L7,3.5 z" fill="#6e7681" opacity="0.6"/></marker>
-    <filter id="fl-sh"><feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000" flood-opacity="0.4"/></filter>
-    <filter id="fl-glow-s"><feGaussianBlur stdDeviation="4" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
-    <filter id="fl-glow-b"><feColorMatrix type="matrix" values="1 0.5 0 0 0  0.8 0.6 0 0 0  0 0 0 0 0  0 0 0 1 0" result="amber"/><feGaussianBlur stdDeviation="4" result="blur" in="amber"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
-  </defs>`;
-
-  // Draw edges (below nodes)
-  const drawnEdges = new Set();
-  for (const e of edges) {
-    const fNode = nodeMap[e.from], tNode = nodeMap[e.to];
-    if (!fNode || !tNode) continue;
-    const eKey = `${e.from}→${e.to}`;
-    if (drawnEdges.has(eKey)) continue;
-    drawnEdges.add(eKey);
-    const x1 = fNode.x + FL_NODE_W, y1 = fNode.y + FL_NODE_H/2;
-    const x2 = tNode.x,             y2 = tNode.y + FL_NODE_H/2;
-    const cx1 = x1 + (x2-x1)*0.4, cx2 = x2 - (x2-x1)*0.4;
-    const col = FL_COLORS[e.type] || '#6e7681';
-    const arrId = e.type==='steered'?'fl-arr-s':e.type==='bypassed'?'fl-arr-b':e.type==='mixed'?'fl-arr-m':'fl-arr-i';
-    const animCls = (e.type==='steered'||e.type==='bypassed') ? ' class="fl-anim"' : '';
-    const dArray = (e.type==='steered'||e.type==='bypassed') ? 'stroke-dasharray="7 3"' : '';
-    svg += `<path d="M${x1},${y1} C${cx1},${y1} ${cx2},${y2} ${x2},${y2}"
-      fill="none" stroke="${col}" stroke-width="1.6" opacity="0.65"
-      ${dArray} stroke-dashoffset="0"
-      marker-end="url(#${arrId})"${animCls}/>`;
-  }
-
-  // Draw column headers
-  const COL_LABELS = ['Identity', 'Applications', 'Network Path', 'Destinations'];
-  const COL_X = [FL_PAD_X, FL_PAD_X+FL_COL_W, FL_PAD_X+FL_COL_W*2, FL_PAD_X+FL_COL_W*3];
-  COL_LABELS.forEach((label, i) => {
-    svg += `<text x="${COL_X[i]+FL_NODE_W/2}" y="22" text-anchor="middle"
-      font-size="9.5" font-weight="600" fill="#6e7681" font-family="system-ui,sans-serif"
-      text-transform="uppercase" letter-spacing="0.08em">${label.toUpperCase()}</text>
-    <line x1="${COL_X[i]}" y1="28" x2="${COL_X[i]+FL_NODE_W}" y2="28" stroke="#21262d" stroke-width="1"/>`;
-  });
-
-  // Draw nodes
-  for (const n of nodes) {
-    const c = FL_COLORS[n.status||'info'];
-    const bg = FL_BG[n.type] || '#161b22';
-    const icon = FL_ICONS[n.type] || '●';
-    const isSelected = n.id === flState.selectedNodeId;
-    const sw = isSelected ? '2.5' : '1.5';
-    const glowF = n.type==='sase' ? 'fl-glow-s' : n.type==='bypass' ? 'fl-glow-b' : 'fl-sh';
-
-    svg += `<g class="fl-node-g" onclick="flNodeClick('${n.id}')" transform="translate(${n.x},${n.y})">
-      <rect class="fl-nr" width="${FL_NODE_W}" height="${FL_NODE_H}" rx="7"
-        fill="${bg}" stroke="${isSelected?'#ffffff':c}" stroke-width="${sw}" filter="url(#${glowF})"/>`;
-
-    // icon
-    svg += `<text x="13" y="${FL_NODE_H/2+1}" dominant-baseline="middle" font-size="17" style="pointer-events:none">${icon}</text>`;
-
-    // main label
-    svg += `<text x="36" y="19" font-size="11" font-weight="600" fill="#e6edf3"
-      font-family="system-ui,sans-serif" style="pointer-events:none">${esc(n.label)}</text>`;
-
-    // sub label
-    if (n.sub) svg += `<text x="36" y="33" font-size="9.5" fill="#8b949e"
-      font-family="system-ui,sans-serif" style="pointer-events:none">${esc(n.sub)}</text>`;
-
-    // flow counts
-    if (n.steered != null && (n.type==='process'||n.type==='destination')) {
-      svg += `<text x="36" y="${FL_NODE_H-8}" font-size="9" fill="#3fb950"
-        font-family="system-ui,sans-serif" style="pointer-events:none">▲${n.steered}</text>
-        <text x="70" y="${FL_NODE_H-8}" font-size="9" fill="${n.bypassed>0?'#d29922':'#6e7681'}"
-        font-family="system-ui,sans-serif" style="pointer-events:none">⚠${n.bypassed}</text>`;
-    }
-
-    // selection ring
-    if (isSelected) {
-      svg += `<rect width="${FL_NODE_W}" height="${FL_NODE_H}" rx="7" fill="none"
-        stroke="#ffffff" stroke-width="0.5" opacity="0.3" style="pointer-events:none"/>`;
-    }
-
-    svg += `</g>`;
-  }
-
-  const svgEl = document.getElementById('fl-svg');
-  if (!svgEl) return;
-  svgEl.setAttribute('width', svgW);
-  svgEl.setAttribute('height', svgH);
-  svgEl.innerHTML = svg;
-
-  flUpdateTransform();
-  flUpdateMinimap(nodes, svgW, svgH);
-  flRenderTimeline(group);
-
-  const countEl = document.getElementById('fl-count');
-  if (countEl) countEl.textContent = `${nodes.length} nodes · ${drawnEdges.size} edges`;
-}
-
-// ─── Minimap ──────────────────────────────────────────────────────────────────
-function flUpdateMinimap(nodes, svgW, svgH) {
-  const mmEl = document.getElementById('fl-mm');
-  if (!mmEl) return;
-  const MW = 150, MH = 82;
-  const sx = MW / Math.max(svgW, 1), sy = MH / Math.max(svgH, 1);
-  const s = Math.min(sx, sy) * 0.88;
-  let html = '';
-  for (const n of nodes) {
-    const c = FL_COLORS[n.status||'info'];
-    html += `<rect x="${(n.x*s+4).toFixed(1)}" y="${(n.y*s+4).toFixed(1)}"
-      width="${(FL_NODE_W*s).toFixed(1)}" height="${(FL_NODE_H*s).toFixed(1)}"
-      rx="2" fill="${c}" opacity="0.5"/>`;
-  }
-  mmEl.innerHTML = html;
-}
-
-// ─── Timeline ─────────────────────────────────────────────────────────────────
-function flRenderTimeline(group) {
-  const el = document.getElementById('fl-timeline');
-  if (!el) return;
-  const evs = [...(group.events||[])].sort((a,b)=>(a.ts||'')>(b.ts||'')?1:-1).slice(0,120);
-  if (!evs.length) { el.innerHTML = '<span style="font-size:10px;color:var(--muted)">No events</span>'; return; }
-
-  // Build hourly buckets for a bar chart look
-  const buckets = {};
-  for (const ev of evs) {
-    const ts = (ev.ts||'').slice(0,13); // YYYY/MM/DD HH
-    if (!buckets[ts]) buckets[ts] = { steered:0, bypassed:0 };
-    if (ev.type==='tunnel') buckets[ts].steered++;
-    else buckets[ts].bypassed++;
-  }
-  const bKeys = Object.keys(buckets).sort();
-  const maxVal = Math.max(1, ...bKeys.map(k=>buckets[k].steered+buckets[k].bypassed));
-  const barW = Math.max(4, Math.min(18, Math.floor(300/Math.max(bKeys.length,1))));
-
-  el.innerHTML = bKeys.map(k => {
-    const b = buckets[k];
-    const total = b.steered + b.bypassed;
-    const h = Math.max(4, Math.round((total/maxVal)*40));
-    const hS = Math.round((b.steered/total)*h);
-    const hB = h - hS;
-    const label = k.slice(8).replace(' ',' ');
-    return `<div title="${k}: ${b.steered} steered, ${b.bypassed} bypassed"
-      style="display:flex;flex-direction:column;align-items:center;cursor:default;flex-shrink:0">
-      <div style="display:flex;flex-direction:column-reverse;align-items:center;gap:0">
-        ${hS > 0 ? `<div style="width:${barW}px;height:${hS}px;background:#3fb950;border-radius:2px 2px 0 0;opacity:0.8"></div>` : ''}
-        ${hB > 0 ? `<div style="width:${barW}px;height:${hB}px;background:#d29922;border-radius:${hS>0?'0':'2px 2px'} 0 0;opacity:0.8"></div>` : ''}
-      </div>
-      <div style="font-size:8px;color:var(--muted);margin-top:2px;white-space:nowrap">${label}</div>
-    </div>`;
-  }).join('');
-}
-
-// ─── Inspector ────────────────────────────────────────────────────────────────
-function flNodeClick(nid) {
-  flState.selectedNodeId = nid;
-  const g = flState.filteredGroups[flState.selectedGroupIdx];
-  if (!g) return;
-  const { nodes } = flBuildNodes(g);
-  const node = nodes.find(n=>n.id===nid);
-
-  // Re-render SVG to show selection highlight
-  flRenderGraph(g);
-  flRenderInspector(node, g);
-}
-
-function flRenderInspector(node, group) {
-  const el = document.getElementById('fl-inspector');
-  if (!el) return;
-  const header = `<div style="padding:10px 14px;border-bottom:1px solid var(--border);flex-shrink:0">
-    <div style="font-size:10px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.07em">Inspector</div>
-    ${node ? `<div style="font-size:12px;font-weight:600;color:var(--text);margin-top:4px">
-      ${FL_ICONS[node.type]||'●'} ${esc(node.fullLabel||node.label)}</div>` : ''}
-  </div>`;
-
-  el.innerHTML = header + `<div style="padding:14px;font-size:12px;overflow-y:auto">${flInspectorBody(node, group)}</div>`;
-}
-
-function flInspectorBody(node, group) {
-  if (!node) {
-    if (!group) return `<div style="color:var(--muted);text-align:center;padding:20px 0">Select a group to begin</div>`;
-    const pm = group.procMap, hm = group.hosts;
-    return `<div style="margin-bottom:12px">
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:12px">
-          <div style="background:var(--bg2);border-radius:6px;padding:8px;text-align:center">
-            <div style="color:#3fb950;font-size:18px;font-weight:700">${group.steered}</div>
-            <div style="font-size:10px;color:var(--muted)">Steered</div>
-          </div>
-          <div style="background:var(--bg2);border-radius:6px;padding:8px;text-align:center">
-            <div style="color:${group.bypassed?'#d29922':'var(--muted)'};font-size:18px;font-weight:700">${group.bypassed}</div>
-            <div style="font-size:10px;color:var(--muted)">Bypassed</div>
-          </div>
-        </div>
-        <div style="margin-bottom:10px">
-          <div style="color:var(--muted);font-size:10px;margin-bottom:4px">Applications (${Object.keys(pm).length})</div>
-          ${Object.entries(pm).slice(0,8).map(([p,pd])=>`
-            <div style="display:flex;align-items:center;padding:3px 0;border-bottom:1px solid var(--border);gap:4px">
-              <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;color:var(--text)" title="${esc(p)}">${esc(flShortProc(p))}</span>
-              <span style="color:#3fb950;font-size:10px">▲${pd.steered}</span>
-              <span style="color:${pd.bypassed?'#d29922':'var(--muted)'};font-size:10px">⚠${pd.bypassed}</span>
-            </div>`).join('')}
-        </div>
-        ${group.firstSeen ? `<div style="font-size:10px;color:var(--muted)">
-          <div>First: ${esc(group.firstSeen?.slice(0,19)||'')}</div>
-          <div>Last:  ${esc(group.lastSeen?.slice(0,19)||'')}</div>
-        </div>` : ''}
-      </div>
-      <div style="color:var(--muted);font-size:11px;text-align:center;opacity:0.6;padding-top:8px">Click a node to inspect</div>`;
-  }
-
-  if (node.type === 'user') {
-    const id = state.identity || {};
-    const si = state.sysinfo || {};
-    const rows = [['UPN/Email',id.upn||id.email||'—'],['Username',id.username||'—'],['Domain',id.domain||'—'],
-      ['Device',si['Host']||si['Hostname']||'—'],['OS',si['OS Version']||si['OS']||'—'],
-      ['NS Version',si['NS Client Version']||si['Client Version']||'—'],['Source',id.source||'—']];
-    return `<div style="display:flex;flex-direction:column;gap:5px">${rows.map(([k,v])=>`
-      <div style="display:flex;gap:8px;padding:3px 0;border-bottom:1px solid var(--border)">
-        <span style="color:var(--muted);min-width:72px;font-size:10px;flex-shrink:0">${esc(k)}</span>
-        <span style="color:var(--text);word-break:break-all;font-size:11px">${esc(v)}</span>
-      </div>`).join('')}</div>`;
-  }
-
-  if (node.type === 'process') {
-    const procKey = node.fullLabel;
-    const recentEvs = (group.events||[]).filter(e=>e.process===procKey).slice(-8).reverse();
-    return `<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:10px">
-      <div style="background:var(--bg2);border-radius:6px;padding:8px;text-align:center">
-        <div style="color:#3fb950;font-size:17px;font-weight:700">${node.steered}</div>
-        <div style="font-size:10px;color:var(--muted)">Steered</div>
-      </div>
-      <div style="background:var(--bg2);border-radius:6px;padding:8px;text-align:center">
-        <div style="color:${node.bypassed?'#d29922':'var(--muted)'};font-size:17px;font-weight:700">${node.bypassed}</div>
-        <div style="font-size:10px;color:var(--muted)">Bypassed</div>
-      </div>
-    </div>
-    <div style="margin-bottom:10px">
-      <div style="color:var(--muted);font-size:10px;margin-bottom:3px">Accessed hosts (${node.hosts?.length||0})</div>
-      ${(node.hosts||[]).slice(0,8).map(h=>`<div style="padding:2px 0;color:var(--text);font-size:11px;font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(h)}">${esc(h)}</div>`).join('')}
-      ${(node.hosts?.length||0)>8?`<div style="color:var(--muted);font-size:10px">+${node.hosts.length-8} more</div>`:''}
-    </div>
-    ${recentEvs.length?`<div style="color:var(--muted);font-size:10px;margin-bottom:3px">Recent events</div>
-    ${recentEvs.map(ev=>`<div style="padding:4px 0;border-bottom:1px solid var(--border)">
-      <div style="display:flex;gap:4px;align-items:center;font-size:10px">
-        <span style="color:${ev.type==='tunnel'?'#3fb950':'#d29922'}">${ev.type==='tunnel'?'▲SASE':'⚠SKIP'}</span>
-        <span style="color:var(--muted)">${esc((ev.ts||'').slice(11,19))}</span>
-      </div>
-      <div style="color:var(--text);font-size:11px;font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(ev.host)}</div>
-    </div>`).join('')}`:''}`;
-  }
-
-  if (node.type === 'sase') {
-    return `<div style="background:rgba(63,185,80,0.1);border:1px solid rgba(63,185,80,0.3);border-radius:6px;padding:10px;margin-bottom:10px">
-      <div style="color:#3fb950;font-weight:600;font-size:11px;margin-bottom:4px">🛡️ Netskope SASE</div>
-      <div style="font-size:10px;color:var(--muted)">Traffic is routed through Netskope's SASE platform for SSL decryption, DLP scanning, CASB inspection, and threat analysis before reaching the destination.</div>
-    </div>
-    <div style="font-size:11px"><span style="color:var(--muted)">Total steered: </span><span style="color:#3fb950;font-weight:600">${node.total}</span></div>`;
-  }
-
-  if (node.type === 'bypass') {
-    return `<div style="background:rgba(210,153,34,0.1);border:1px solid rgba(210,153,34,0.3);border-radius:6px;padding:10px;margin-bottom:10px">
-      <div style="color:#d29922;font-weight:600;font-size:11px;margin-bottom:4px">⚠️ Direct / Bypass Path</div>
-      <div style="font-size:10px;color:var(--muted)">This traffic is NOT inspected by Netskope. It flows directly from the application to the destination, bypassing all security controls including DLP and threat scanning.</div>
-    </div>
-    <div style="font-size:11px"><span style="color:var(--muted)">Total bypassed: </span><span style="color:#d29922;font-weight:600">${node.total}</span></div>`;
-  }
-
-  if (node.type === 'destination') {
-    const hd = group.hosts[node.fullLabel||node.label];
-    const procs = (hd?.processes||[]);
-    return `<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:10px">
-      <div style="background:var(--bg2);border-radius:6px;padding:8px;text-align:center">
-        <div style="color:#3fb950;font-size:17px;font-weight:700">${node.steered}</div>
-        <div style="font-size:10px;color:var(--muted)">Steered</div>
-      </div>
-      <div style="background:var(--bg2);border-radius:6px;padding:8px;text-align:center">
-        <div style="color:${node.bypassed?'#d29922':'var(--muted)'};font-size:17px;font-weight:700">${node.bypassed}</div>
-        <div style="font-size:10px;color:var(--muted)">Bypassed</div>
-      </div>
-    </div>
-    <div>
-      <div style="color:var(--muted);font-size:10px;margin-bottom:3px">Accessed by</div>
-      ${procs.slice(0,8).map(p=>`<div style="font-size:11px;color:var(--text);padding:1px 0">${esc(flShortProc(p))}</div>`).join('')}
-      ${procs.length>8?`<div style="color:var(--muted);font-size:10px">+${procs.length-8} more</div>`:''}
-    </div>`;
-  }
-
-  if (node.type === 'more') {
-    return `<div style="color:var(--muted);font-size:11px">Scroll the group list or refine search to see additional items.</div>`;
-  }
-
-  return `<div style="color:var(--muted);font-size:11px">No details.</div>`;
-}
-
-// ─── Pan / Zoom ───────────────────────────────────────────────────────────────
-function flBindCanvasEvents() {
-  const canvas = document.getElementById('fl-canvas');
-  if (!canvas || canvas.dataset.evBound) return;
-  canvas.dataset.evBound = '1';
-
-  canvas.addEventListener('mousedown', e => {
-    if (e.button !== 0 || e.target.closest('.fl-node-g')) return;
-    flState.isDragging = true;
-    flState.startX = e.clientX; flState.startY = e.clientY;
-    flState.startPanX = flState.panX; flState.startPanY = flState.panY;
-    canvas.style.cursor = 'grabbing';
-  });
-  document.addEventListener('mousemove', e => {
-    if (!flState.isDragging) return;
-    flState.panX = flState.startPanX + (e.clientX - flState.startX);
-    flState.panY = flState.startPanY + (e.clientY - flState.startY);
-    flUpdateTransform();
-  });
-  document.addEventListener('mouseup', () => {
-    if (!flState.isDragging) return;
-    flState.isDragging = false;
-    const c = document.getElementById('fl-canvas');
-    if (c) c.style.cursor = 'grab';
-  });
-  canvas.addEventListener('wheel', e => {
-    e.preventDefault();
-    flState.scale = Math.max(0.25, Math.min(3, flState.scale + (e.deltaY > 0 ? -0.08 : 0.08)));
-    flUpdateTransform();
-    const sel = document.getElementById('fl-scale');
-    if (sel) sel.textContent = Math.round(flState.scale*100)+'%';
-  }, { passive: false });
-}
-
-function flUpdateTransform() {
-  const gw = document.getElementById('fl-gw');
-  if (gw) gw.style.transform = `translate(${flState.panX}px,${flState.panY}px) scale(${flState.scale})`;
-}
-function flZoom(d) {
-  flState.scale = Math.max(0.25, Math.min(3, flState.scale+d));
-  flUpdateTransform();
-  const el = document.getElementById('fl-scale');
-  if (el) el.textContent = Math.round(flState.scale*100)+'%';
-}
-function flResetView() {
-  flState.panX=40; flState.panY=30; flState.scale=1;
-  flUpdateTransform();
-  const el = document.getElementById('fl-scale');
-  if (el) el.textContent = '100%';
-}
-function flToggleAnim() {
-  flState.animEnabled = !flState.animEnabled;
-  const svg = document.getElementById('fl-svg');
-  if (svg) svg.querySelectorAll('.fl-anim').forEach(e => {
-    e.style.animationPlayState = flState.animEnabled ? 'running' : 'paused';
-  });
-  const btn = document.getElementById('fl-anim-btn');
-  if (btn) btn.textContent = flState.animEnabled ? '⏸' : '▶';
-}
-
 function flShortProc(proc) {
   if (!proc) return '?';
   const p = proc.replace(/\\/g, '/');
@@ -10819,8 +9822,6 @@ function flShortProc(proc) {
   return parts[parts.length-1] || proc;
 }
 
-
-// ─── Flow Path (Beta) ─────────────────────────────────────────────────────────
 
 // ── gzip decompressor (DecompressionStream, Chrome 80+) ──────────────────────
 async function inflateGzip(arrayBuffer) {
@@ -11033,19 +10034,116 @@ function buildFpGroups() {
   );
 }
 
+// ── Application-mode group builder ───────────────────────────────────────────
+function buildFpGroupsByApp() {
+  const { events = [] } = state.traffic || {};
+  const groupMap = {};
+
+  for (const ev of events) {
+    const proc   = ev.process || 'unknown';
+    const host   = ev.host   || '?';
+    const path   = fpClassifyPath(proc, host, ev.type === 'tunnel');
+
+    if (!groupMap[proc]) {
+      groupMap[proc] = {
+        domain: flShortProc(proc), fullLabel: proc,
+        hosts: {}, procMap: {}, paths: { npa:0, swg:0, bwan:0, direct:0 },
+        events: [], firstSeen: null, lastSeen: null, anomalies: []
+      };
+    }
+    const g = groupMap[proc];
+    g.events.push({ ...ev, path });
+    g.paths[path]++;
+
+    const dom = flExtractDomain(host);
+    if (!g.hosts[dom]) g.hosts[dom] = { npa:0, swg:0, bwan:0, direct:0, processes: new Set() };
+    g.hosts[dom][path]++;
+    g.hosts[dom].processes.add(proc);
+
+    if (!g.procMap[proc]) g.procMap[proc] = { npa:0, swg:0, bwan:0, direct:0, hosts: new Set() };
+    g.procMap[proc][path]++;
+    g.procMap[proc].hosts.add(host);
+
+    if (ev.ts) {
+      if (!g.firstSeen || ev.ts < g.firstSeen) g.firstSeen = ev.ts;
+      if (!g.lastSeen  || ev.ts > g.lastSeen)  g.lastSeen  = ev.ts;
+    }
+  }
+
+  for (const g of Object.values(groupMap)) {
+    for (const [proc, pd] of Object.entries(g.procMap)) {
+      if (pd.npa > 0 && pd.direct > 0)
+        g.anomalies.push({ sev: 'high',   proc, msg: `${flShortProc(proc)} has NPA + Direct split` });
+      if (pd.swg > 0 && pd.direct > 0)
+        g.anomalies.push({ sev: 'medium', proc, msg: `${flShortProc(proc)} has SWG + Direct split` });
+    }
+  }
+
+  return Object.values(groupMap).sort((a, b) =>
+    (b.paths.npa + b.paths.swg + b.paths.bwan + b.paths.direct) -
+    (a.paths.npa + a.paths.swg + a.paths.bwan + a.paths.direct)
+  );
+}
+
+// ── NPA-mode group builder ────────────────────────────────────────────────────
+function buildFpGroupsByNPA() {
+  const { events = [] } = state.traffic || {};
+  const groupMap = {};
+
+  for (const ev of events) {
+    const path = fpClassifyPath(ev.process, ev.host, ev.type === 'tunnel');
+    if (path !== 'npa') continue;
+
+    const host   = ev.host || '?';
+    const domain = flExtractDomain(host);
+
+    if (!groupMap[domain]) {
+      groupMap[domain] = {
+        domain, hosts: {}, procMap: {}, paths: { npa:0, swg:0, bwan:0, direct:0 },
+        events: [], firstSeen: null, lastSeen: null, anomalies: []
+      };
+    }
+    const g = groupMap[domain];
+    g.events.push({ ...ev, path });
+    g.paths[path]++;
+
+    if (!g.hosts[host]) g.hosts[host] = { npa:0, swg:0, bwan:0, direct:0, processes: new Set() };
+    g.hosts[host][path]++;
+    g.hosts[host].processes.add(ev.process);
+
+    if (!g.procMap[ev.process]) g.procMap[ev.process] = { npa:0, swg:0, bwan:0, direct:0, hosts: new Set() };
+    g.procMap[ev.process][path]++;
+    g.procMap[ev.process].hosts.add(host);
+
+    if (ev.ts) {
+      if (!g.firstSeen || ev.ts < g.firstSeen) g.firstSeen = ev.ts;
+      if (!g.lastSeen  || ev.ts > g.lastSeen)  g.lastSeen  = ev.ts;
+    }
+  }
+
+  return Object.values(groupMap).sort((a, b) => b.paths.npa - a.paths.npa);
+}
+
+function fpBuildGroupsForMode() {
+  const m = fpState.mode;
+  if (m === 'app')  return buildFpGroupsByApp();
+  if (m === 'npa')  return buildFpGroupsByNPA();
+  return buildFpGroups();   // domain (default)
+}
+
 // ── Render entry ──────────────────────────────────────────────────────────────
 let fpState = {
   groups: [], filteredGroups: [], selectedIdx: 0, selectedNodeId: null,
   panX: 40, panY: 30, scale: 1, isDragging: false,
   startX: 0, startY: 0, startPanX: 0, startPanY: 0,
   searchQuery: '', showFilter: 'all', diagMode: true,
-  evBindDone: false
+  evBindDone: false, mode: 'domain'
 };
 
 function renderFlowPath() {
   const panel = document.getElementById('flow-path-content');
   if (!panel) return;
-  fpState.groups = buildFpGroups();
+  fpState.groups = fpBuildGroupsForMode();
   fpState.filteredGroups = fpState.groups.slice();
   fpState.selectedIdx = 0;
 
@@ -11075,7 +10173,12 @@ function fpShellHTML() {
   <!-- LEFT sidebar -->
   <div id="fp-sidebar" style="width:250px;min-width:200px;border-right:1px solid var(--border);display:flex;flex-direction:column;background:var(--bg1);flex-shrink:0">
     <div style="padding:10px 12px;border-bottom:1px solid var(--border)">
-      <div style="font-size:10px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-bottom:6px">Flow Groups</div>
+      <div style="font-size:10px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-bottom:6px">Flow Path</div>
+      <div id="fp-mode-pills" style="display:flex;gap:3px;margin-bottom:6px">
+        <button class="fl-fbtn${fpState.mode==='domain'?' active':''}" data-m="domain" onclick="fpSetMode('domain',this)">Domain</button>
+        <button class="fl-fbtn${fpState.mode==='app'   ?' active':''}" data-m="app"    onclick="fpSetMode('app',this)">Application</button>
+        <button class="fl-fbtn${fpState.mode==='npa'   ?' active':''}" data-m="npa"    onclick="fpSetMode('npa',this)">NPA</button>
+      </div>
       <input id="fp-search" class="search-box" placeholder="Search domain or IP…" oninput="fpFilterGroups(this.value)"
         style="width:100%;box-sizing:border-box;font-size:11px;margin-bottom:6px">
       <div style="display:flex;gap:3px;flex-wrap:wrap">
@@ -11134,6 +10237,20 @@ function fpShellHTML() {
 function fpFilterGroups(q) {
   fpState.searchQuery = q.toLowerCase().trim();
   fpApplyFilters();
+}
+function fpSetMode(mode, btn) {
+  fpState.mode = mode;
+  fpState.searchQuery = '';
+  fpState.showFilter = 'all';
+  fpState.selectedIdx = 0;
+  document.querySelectorAll('#fp-mode-pills .fl-fbtn').forEach(b => b.classList.toggle('active', b.dataset.m === mode));
+  document.querySelectorAll('#fp-sidebar .fl-fbtn[data-f]').forEach(b => b.classList.toggle('active', b.dataset.f === 'all'));
+  const si = document.getElementById('fp-search'); if (si) si.value = '';
+  fpState.groups = fpBuildGroupsForMode();
+  fpState.filteredGroups = fpState.groups.slice();
+  fpRenderGroupList();
+  if (fpState.filteredGroups.length) fpSelectGroup(0);
+  else { fpClearGraph(); fpRenderInspectorEmpty(); }
 }
 function fpSetFilter(f, btn) {
   fpState.showFilter = f;
