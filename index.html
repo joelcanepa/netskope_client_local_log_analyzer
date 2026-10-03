@@ -567,6 +567,68 @@ body {
 }
 .si-panel { display: none; flex-direction: column; gap: 12px; }
 .si-panel.active { display: flex; }
+/* ── Config Files viewer ──────────────────────────────────────── */
+.cf-panel { display: flex; flex: 1; overflow: hidden; }
+.cf-sidebar {
+  width: 210px; flex-shrink: 0;
+  background: var(--bg2); border-right: 1px solid var(--border);
+  overflow-y: auto; padding: 6px 0;
+}
+.cf-group-label {
+  padding: 8px 12px 3px; font-size: 10px; font-weight: 700;
+  letter-spacing: .07em; text-transform: uppercase; color: var(--muted);
+}
+.cf-file-item {
+  display: flex; align-items: center; gap: 4px;
+  padding: 6px 12px; font-size: 11.5px; cursor: pointer;
+  border-left: 2px solid transparent; user-select: none;
+  transition: background .1s, color .1s;
+}
+.cf-file-item:hover { background: var(--bg3); color: var(--text); }
+.cf-file-item.active { background: var(--bg3); border-left-color: var(--primary); color: var(--text); font-weight: 600; }
+.cf-file-item.cf-missing { opacity: .38; cursor: default; }
+.cf-fname { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cf-fsize { font-size: 10px; color: var(--muted); white-space: nowrap; flex-shrink: 0; }
+.cf-missing-label { font-size: 10px; color: var(--muted); font-style: italic; }
+.cf-main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.cf-toolbar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 12px; background: var(--bg2); border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.cf-filename { font-size: 12px; font-weight: 600; color: var(--text); flex-shrink: 0; }
+.cf-filesize { font-size: 11px; color: var(--muted); flex-shrink: 0; }
+.cf-search {
+  flex: 1; max-width: 260px; padding: 3px 8px; font-size: 12px;
+  background: var(--bg3); border: 1px solid var(--border); border-radius: 5px;
+  color: var(--text); outline: none;
+}
+.cf-search:focus { border-color: var(--primary); }
+.cf-btn {
+  padding: 3px 10px; font-size: 11px; border-radius: 5px; cursor: pointer;
+  background: var(--bg3); border: 1px solid var(--border); color: var(--text);
+  white-space: nowrap;
+}
+.cf-btn:hover { border-color: var(--primary); color: var(--primary); }
+.cf-code-wrap { flex: 1; overflow: auto; }
+.cf-code {
+  margin: 0; padding: 12px 16px; font-size: 11.5px; line-height: 1.55;
+  font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', ui-monospace, monospace;
+  white-space: pre; color: var(--text); tab-size: 2;
+}
+.cf-code .jk  { color: #79c0ff; }   /* JSON key */
+.cf-code .js  { color: #a5d6ff; }   /* JSON string value */
+.cf-code .jn  { color: #f2cc60; }   /* JSON number */
+.cf-code .jb  { color: #ff9056; }   /* JSON boolean */
+.cf-code .jnull { color: var(--muted); }
+.cf-code mark { background: rgba(255,214,0,.25); color: inherit; border-radius: 2px; }
+.cf-trunc {
+  padding: 8px 16px; background: var(--bg2); border-top: 1px solid var(--border);
+  font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 10px;
+}
+.cf-trunc button { font-size: 11px; padding: 2px 8px; border-radius: 4px; cursor: pointer;
+  background: var(--bg3); border: 1px solid var(--border); color: var(--text); }
+.cf-trunc button:hover { border-color: var(--primary); }
 .info-card {
   background: var(--bg2);
   border: 1px solid var(--border);
@@ -745,6 +807,7 @@ body {
   <div class="tab" data-tab="flowlineage">🗺️ Flow Lineage</div>
   <div class="tab" data-tab="flowpath" data-beta="true">⚡ Flow Path <span style="font-size:9px;background:#bc8cff33;color:#bc8cff;border:1px solid #bc8cff55;border-radius:3px;padding:1px 4px;vertical-align:middle;font-weight:700">BETA</span></div>
   <div class="tab" data-tab="timeline" data-beta="true">📈 Timeline <span style="font-size:9px;background:#3fb95033;color:#3fb950;border:1px solid #3fb95055;border-radius:3px;padding:1px 4px;vertical-align:middle;font-weight:700">BETA</span></div>
+  <div class="tab" data-tab="configfiles">⚙️ Config Files <span class="tab-badge info" id="tab-config-count">0</span></div>
   <div class="tab" data-tab="sysinfo">🖥️ System Info</div>
 </div>
 
@@ -890,6 +953,21 @@ body {
   </div>
 
 <!-- System Info -->
+  <div class="tab-panel" id="panel-configfiles">
+    <div class="cf-panel">
+      <div class="cf-sidebar" id="cf-sidebar"></div>
+      <div class="cf-main" id="cf-main">
+        <div class="cf-toolbar" id="cf-toolbar" style="display:none">
+          <span class="cf-filename" id="cf-filename"></span>
+          <span class="cf-filesize" id="cf-filesize"></span>
+          <input class="cf-search" id="cf-search" type="text" placeholder="Search in file…" oninput="cfSearch(this.value)" />
+          <button class="cf-btn" onclick="cfCopy()">📋 Copy</button>
+        </div>
+        <div class="cf-code-wrap" id="cf-code-wrap"></div>
+      </div>
+    </div>
+  </div>
+
   <div class="tab-panel" id="panel-sysinfo">
     <div class="sysinfo-panel">
       <div class="si-sidebar" id="si-sidebar"></div>
@@ -946,7 +1024,7 @@ body {
 
 <script>
 // ─── Version ─────────────────────────────────────────────────────────────────
-const TOOL_VERSION = '1.12.7';
+const TOOL_VERSION = '1.13.0';
 
 // ─── State ────────────────────────────────────────────────────────────────────
 const state = {
@@ -1655,6 +1733,7 @@ function renderAll() {
   renderFlowPath();
   renderNPA();
   renderAiDiscovery();
+  cfUpdateBadge();
   populateFileSelect();
   // Sync All Files UI state (defaulted to true in reset)
   const _sel = document.getElementById('log-file-select');
@@ -6551,6 +6630,7 @@ function setActiveTab(tab) {
     if (rows.length) buildLogHistogram(rows);
   }, 50);
   if (tab === 'timeline') setTimeout(renderTimeline, 0);
+  if (tab === 'configfiles') setTimeout(renderConfigFiles, 0);
 }
 
 function toggleBetaTabs(enabled) {
@@ -6571,6 +6651,192 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 document.querySelectorAll('.tab').forEach(t => t.onclick = () => setActiveTab(t.dataset.tab));
+
+// ─── Config Files viewer ───────────────────────────────────────────────────────
+const CF_CATALOG = [
+  { group: 'Client Config', files: ['nsconfig.json','nssteering.json','nsbypass.json','nsuserconfig.json','nsdeviceid.json','nsdeviceidstatus.json','nsinternal.json'] },
+  { group: 'SD-WAN / BWAN',  files: ['nsbwanconfig.json','infiot-client-config.json'] },
+  { group: 'NPA',             files: ['npaexceptions.json'] },
+  { group: 'EPDLP',          files: ['nsepdlpconfig.json','epdlp_status.json','epdlp_local_config.json','epdlp_tenant_config.json','epdlp_AccountData.json','epdlp_sys_log.log'] },
+  { group: 'AI Discovery',   files: ['ai_discovery_gef_debug.json'] },
+  { group: 'Telemetry',      files: ['metrics.json','dem.json','eventcache.json'] },
+];
+const CF_MAX_LINES = 2000;
+let cfState = { filename: null, lines: [], isJson: false };
+
+function cfFmtSize(n) {
+  if (n < 1024) return n + ' B';
+  if (n < 1048576) return (n/1024).toFixed(1) + ' KB';
+  return (n/1048576).toFixed(1) + ' MB';
+}
+
+function cfEsc(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function cfHighlightLine(line) {
+  let s = cfEsc(line);
+  s = s.replace(/^(\s*)(&quot;(?:[^&]|&(?!quot;))*&quot;)(\s*:)/, '$1<span class="jk">$2</span>$3');
+  s = s.replace(/(?::\s*)(&quot;(?:[^&]|&(?!quot;))*&quot;)(,?)$/, (m, v, c) => ': <span class="js">' + v + '</span>' + c);
+  s = s.replace(/(?::\s*)(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)(,?)$/, ': <span class="jn">$1</span>$2');
+  s = s.replace(/(?::\s*)(true|false)(,?)$/, ': <span class="jb">$1</span>$2');
+  s = s.replace(/(?::\s*)(null)(,?)$/, ': <span class="jnull">$1</span>$2');
+  return s;
+}
+
+function cfUpdateBadge() {
+  if (!state.files) return;
+  const catalogued = new Set(CF_CATALOG.flatMap(g => g.files));
+  const extras = Object.keys(state.files).filter(f =>
+    !catalogued.has(f) && !/\.(log)$/i.test(f) &&
+    !['SystemInfo.log','appInfo.log','network-state.log'].includes(f)
+  );
+  const total = CF_CATALOG.reduce((n, g) => n + g.files.filter(f => state.files[f]).length, 0) + extras.length;
+  const badge = document.getElementById('tab-config-count');
+  if (badge) badge.textContent = total;
+}
+
+function renderConfigFiles() {
+  if (!state.files) return;
+  const sidebar = document.getElementById('cf-sidebar');
+  if (!sidebar) return;
+
+  const catalogued = new Set(CF_CATALOG.flatMap(g => g.files));
+  const extras = Object.keys(state.files).filter(f =>
+    !catalogued.has(f) &&
+    !/\.(log)$/i.test(f) &&
+    !['SystemInfo.log','appInfo.log','network-state.log'].includes(f)
+  );
+
+  let html = '';
+  let first = null;
+  let total = 0;
+
+  for (const { group, files } of CF_CATALOG) {
+    const present = files.filter(f => state.files[f]);
+    const all = files;
+    html += `<div class="cf-group-label">${group}</div>`;
+    for (const f of all) {
+      const has = !!state.files[f];
+      if (has) { total++; if (!first) first = f; }
+      html += `<div class="cf-file-item${has ? '' : ' cf-missing'}" data-filename="${f}"${has ? ` onclick="cfSelectFile('${f}')"` : ''}>
+        <span class="cf-fname">${f}</span>
+        ${has ? `<span class="cf-fsize">${cfFmtSize(state.files[f].length)}</span>` : '<span class="cf-missing-label">not in bundle</span>'}
+      </div>`;
+    }
+  }
+
+  if (extras.length) {
+    html += `<div class="cf-group-label">Other</div>`;
+    for (const f of extras) {
+      total++;
+      if (!first) first = f;
+      html += `<div class="cf-file-item" data-filename="${f}" onclick="cfSelectFile('${f}')">
+        <span class="cf-fname">${f}</span>
+        <span class="cf-fsize">${cfFmtSize(state.files[f].length)}</span>
+      </div>`;
+    }
+  }
+
+  sidebar.innerHTML = html;
+  const badge = document.getElementById('tab-config-count');
+  if (badge) badge.textContent = total;
+
+  if (first && !cfState.filename) cfSelectFile(first);
+  else if (cfState.filename && state.files[cfState.filename]) cfSelectFile(cfState.filename);
+  else if (first) cfSelectFile(first);
+}
+
+function cfSelectFile(filename) {
+  document.querySelectorAll('.cf-file-item').forEach(el =>
+    el.classList.toggle('active', el.dataset.filename === filename));
+
+  const raw = state.files[filename] || '';
+  const isJson = filename.endsWith('.json');
+  let display = raw;
+
+  if (isJson) {
+    try { display = JSON.stringify(JSON.parse(raw), null, 2); } catch {}
+  }
+
+  const lines = display.split('\n');
+  cfState = { filename, lines, isJson };
+
+  const toolbar = document.getElementById('cf-toolbar');
+  if (toolbar) toolbar.style.display = 'flex';
+  const fnEl = document.getElementById('cf-filename');
+  if (fnEl) fnEl.textContent = filename;
+  const fsEl = document.getElementById('cf-filesize');
+  if (fsEl) fsEl.textContent = cfFmtSize(raw.length) + (lines.length > 1 ? ` · ${lines.length.toLocaleString()} lines` : '');
+
+  const search = document.getElementById('cf-search');
+  if (search) search.value = '';
+
+  cfRender(lines, isJson, null);
+}
+
+function cfRender(lines, isJson, query) {
+  const wrap = document.getElementById('cf-code-wrap');
+  if (!wrap) return;
+  const truncated = lines.length > CF_MAX_LINES;
+  const show = truncated ? lines.slice(0, CF_MAX_LINES) : lines;
+
+  const qRe = query ? new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'), 'gi') : null;
+
+  const highlighted = show.map(l => {
+    let h = isJson ? cfHighlightLine(l) : cfEsc(l);
+    if (qRe) {
+      qRe.lastIndex = 0;
+      const stripped = h.replace(/<[^>]+>/g, '');
+      h = h.replace(qRe, m => `<mark>${m}</mark>`);
+    }
+    return h;
+  });
+
+  const preHtml = `<pre class="cf-code" id="cf-code">${highlighted.join('\n')}</pre>`;
+  const truncHtml = truncated
+    ? `<div class="cf-trunc">Showing first ${CF_MAX_LINES.toLocaleString()} of ${lines.length.toLocaleString()} lines
+        <button onclick="cfShowFull()">Show full file</button>
+       </div>`
+    : '';
+
+  wrap.innerHTML = preHtml + truncHtml;
+
+  if (qRe) {
+    const first = wrap.querySelector('mark');
+    if (first) first.scrollIntoView({ block: 'center' });
+  } else {
+    wrap.scrollTop = 0;
+  }
+}
+
+function cfSearch(q) {
+  cfRender(cfState.lines, cfState.isJson, q.trim() || null);
+}
+
+function cfShowFull() {
+  const { lines, isJson } = cfState;
+  const wrap = document.getElementById('cf-code-wrap');
+  if (!wrap) return;
+  const q = document.getElementById('cf-search')?.value.trim() || null;
+  const qRe = q ? new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'), 'gi') : null;
+  const highlighted = lines.map(l => {
+    let h = isJson ? cfHighlightLine(l) : cfEsc(l);
+    if (qRe) { qRe.lastIndex = 0; h = h.replace(qRe, m => `<mark>${m}</mark>`); }
+    return h;
+  });
+  wrap.innerHTML = `<pre class="cf-code" id="cf-code">${highlighted.join('\n')}</pre>`;
+  wrap.scrollTop = 0;
+}
+
+function cfCopy() {
+  if (!cfState.filename) return;
+  const raw = state.files[cfState.filename] || '';
+  navigator.clipboard.writeText(raw).then(() => {
+    const btn = document.querySelector('.cf-toolbar .cf-btn');
+    if (btn) { const t = btn.textContent; btn.textContent = '✓ Copied'; setTimeout(() => btn.textContent = t, 1500); }
+  }).catch(() => {});
+}
 
 // ─── Drag & drop ──────────────────────────────────────────────────────────────
 const dropZone = document.getElementById('drop-zone');
