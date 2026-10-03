@@ -6674,14 +6674,28 @@ function cfEsc(s) {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
+function cfHighlightValue(raw) {
+  const trail = raw.match(/,?\s*$/)[0];
+  const core  = raw.slice(0, raw.length - trail.length);
+  if (core.startsWith('"') && core.endsWith('"'))
+    return `<span class="js">${cfEsc(core)}</span>${cfEsc(trail)}`;
+  if (/^-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$/.test(core))
+    return `<span class="jn">${cfEsc(core)}</span>${cfEsc(trail)}`;
+  if (core === 'true' || core === 'false')
+    return `<span class="jb">${cfEsc(core)}</span>${cfEsc(trail)}`;
+  if (core === 'null')
+    return `<span class="jnull">null</span>${cfEsc(trail)}`;
+  return cfEsc(raw); // structural: {, }, [, ], etc.
+}
+
 function cfHighlightLine(line) {
-  let s = cfEsc(line);
-  s = s.replace(/^(\s*)(&quot;(?:[^&]|&(?!quot;))*&quot;)(\s*:)/, '$1<span class="jk">$2</span>$3');
-  s = s.replace(/(?::\s*)(&quot;(?:[^&]|&(?!quot;))*&quot;)(,?)$/, (m, v, c) => ': <span class="js">' + v + '</span>' + c);
-  s = s.replace(/(?::\s*)(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)(,?)$/, ': <span class="jn">$1</span>$2');
-  s = s.replace(/(?::\s*)(true|false)(,?)$/, ': <span class="jb">$1</span>$2');
-  s = s.replace(/(?::\s*)(null)(,?)$/, ': <span class="jnull">$1</span>$2');
-  return s;
+  const pad     = line.match(/^\s*/)[0];
+  const trimmed = line.slice(pad.length);
+  const kv = trimmed.match(/^("(?:[^"\\]|\\.)*")\s*:\s*(.+)$/);
+  if (kv) {
+    return cfEsc(pad) + `<span class="jk">${cfEsc(kv[1])}</span>: ` + cfHighlightValue(kv[2]);
+  }
+  return cfEsc(pad) + cfHighlightValue(trimmed);
 }
 
 function cfUpdateBadge() {
@@ -6756,7 +6770,7 @@ function cfSelectFile(filename) {
   let display = raw;
 
   if (isJson) {
-    try { display = JSON.stringify(JSON.parse(raw), null, 2); } catch {}
+    try { display = JSON.stringify(JSON.parse(raw.replace(/^﻿/, '')), null, 2); } catch {}
   }
 
   const lines = display.split('\n');
@@ -6784,13 +6798,14 @@ function cfRender(lines, isJson, query) {
   const qRe = query ? new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'), 'gi') : null;
 
   const highlighted = show.map(l => {
-    let h = isJson ? cfHighlightLine(l) : cfEsc(l);
     if (qRe) {
+      // Apply search marks on plain text, then escape & highlight
       qRe.lastIndex = 0;
-      const stripped = h.replace(/<[^>]+>/g, '');
-      h = h.replace(qRe, m => `<mark>${m}</mark>`);
+      const marked = l.replace(qRe, m => `\x00${m}\x01`);
+      const base = isJson ? cfHighlightLine(marked) : cfEsc(marked);
+      return base.replace(/\x00([\s\S]*?)\x01/g, '<mark>$1</mark>');
     }
-    return h;
+    return isJson ? cfHighlightLine(l) : cfEsc(l);
   });
 
   const preHtml = `<pre class="cf-code" id="cf-code">${highlighted.join('\n')}</pre>`;
