@@ -946,7 +946,7 @@ body {
 
 <script>
 // ─── Version ─────────────────────────────────────────────────────────────────
-const TOOL_VERSION = '1.12.6';
+const TOOL_VERSION = '1.12.7';
 
 // ─── State ────────────────────────────────────────────────────────────────────
 const state = {
@@ -3382,8 +3382,14 @@ const ISSUE_PATTERNS = [
         .flatMap(([, r]) => r);
       const dtlsFails = rows.filter(r => /dtls.*fail|fail.*dtls|dtls.*error|dtls.*timeout/i.test(r.msg));
       const tlsFallback = rows.filter(r => /fall.?back.*tls|tls.*fall.?back|established.*tcp|tcp.*tunnel/i.test(r.msg));
-      if (!dtlsFails.length || !tlsFallback.length) return false;
-      return `DTLS failures (${dtlsFails.length}) followed by TLS fallback (${tlsFallback.length} events) — tunnel operating over TCP instead of UDP`;
+      const clientRows = Object.entries(s.parsedLogs)
+        .filter(([k]) => /^(?:nsbwan|bwan)client/.test(k))
+        .flatMap(([, r]) => r);
+      const clientFallback = clientRows.filter(r => /Falling back from UDP\/DTLS to TCP\/TLS|PMTU probe failed on DTLS/i.test(r.msg));
+      if (!dtlsFails.length && !clientFallback.length) return false;
+      if (!tlsFallback.length && !clientFallback.length) return false;
+      const fallbackCount = tlsFallback.length + clientFallback.length;
+      return `DTLS failures (${dtlsFails.length}) followed by TLS fallback (${fallbackCount} events) — tunnel operating over TCP instead of UDP`;
     },
     desc: 'The BWAN tunnel attempted DTLS (UDP-based) but fell back to TLS over TCP. DTLS over UDP is required for optimal SD-WAN performance; a TCP fallback adds latency and is less resilient to packet loss. A second tunnel in a multi-hub Active/Active config stays DTLS-only and will fail when UDP is blocked, leaving only one active path.',
     recommend: 'Verify UDP 4500 is open outbound to the Netskope BWAN PoP IPs. If behind a firewall or proxy that blocks UDP, work with the network team to allow DTLS. In a multi-hub setup, the secondary tunnel fails in DTLS-only mode if UDP is blocked — check PATH_COUNT in nsbwanclient.log to confirm both hubs are active.',
@@ -3444,16 +3450,17 @@ const ISSUE_PATTERNS = [
       const debugRows = Object.entries(s.parsedLogs)
         .filter(([k]) => /^nsbwandebug/.test(k))
         .flatMap(([, r]) => r);
-      const unreachable = debugRows.filter(r => /hub.*unreachable|unreachable.*hub|secondary.*hub.*fail|hub.*disconnect/i.test(r.msg));
+      const unreachable = debugRows.filter(r => /hub.*unreachable|unreachable.*hub|secondary.*hub.*fail|hub.*disconnect|Path state changed to DEAD/i.test(r.msg));
       if (unreachable.length < 2) return false;
       const clientRows = Object.entries(s.parsedLogs)
         .filter(([k]) => /^(?:nsbwan|bwan)client/.test(k))
-        .flatMap(([, r]) => r)
-        .filter(r => r.msg && r.msg.includes('PATH_COUNT:'));
-      const counts = clientRows.map(r => r.msg.match(/PATH_COUNT:\s*(\d+)/)?.[1]).filter(Boolean);
+        .flatMap(([, r]) => r);
+      const pathCountRows = clientRows.filter(r => r.msg && r.msg.includes('PATH_COUNT:'));
+      const counts = pathCountRows.map(r => r.msg.match(/PATH_COUNT:\s*(\d+)/)?.[1]).filter(Boolean);
       const changes = counts.filter((v, i) => i > 0 && v !== counts[i - 1]).length;
-      if (changes < 2) return false;
-      return `${unreachable.length} hub-unreachable event(s) with ${changes} PATH_COUNT changes — Active/Active hub flapping detected (BWAN-4057)`;
+      const hubSwitches = clientRows.filter(r => /Switching active hub VIP from/i.test(r.msg)).length;
+      if (changes < 2 && !hubSwitches) return false;
+      return `${unreachable.length} hub-unreachable event(s) with ${changes} PATH_COUNT changes${hubSwitches ? `, ${hubSwitches} hub VIP switch(es)` : ''} — Active/Active hub flapping detected (BWAN-4057)`;
     },
     desc: 'Hub unreachability events alongside repeated PATH_COUNT oscillation indicate Active/Active hub instability. In BWAN-4057, a secondary hub becomes unreachable and both SD-WAN links flap, causing intermittent connectivity loss.',
     recommend: 'Capture nsbwandebuglog, nsbwanclient.log, and a traceroute to both hub IPs during the next occurrence. Verify both hub PoPs are reachable via UDP 4500. Open a support case referencing BWAN-4057 with the hub IPs and timestamps.',
@@ -3673,7 +3680,7 @@ const ISSUE_PATTERNS = [
       const rows = Object.entries(s.parsedLogs)
         .filter(([k]) => /^nsbwandebug/.test(k))
         .flatMap(([, r]) => r);
-      const hits = rows.filter(r => /adapter.*creation.*fail|fail.*adapter.*creat|virtual.*adapter.*error|create.*adapter.*fail|TapDevice.*fail/i.test(r.msg));
+      const hits = rows.filter(r => /adapter.*creation.*fail|fail.*adapter.*creat|virtual.*adapter.*error|create.*adapter.*fail|TapDevice.*fail|WintunCreateAdapter failed|DeviceIoControl failed on bwan/i.test(r.msg));
       if (!hits.length) return false;
       return `${hits.length} virtual adapter creation failure(s) — BWAN cannot establish its TAP/TUN interface`;
     },
@@ -3830,6 +3837,26 @@ const ISSUE_PATTERNS = [
     recommend: 'Check connectivity to the Netskope signature update endpoint. If consistent 502 errors appear, this may be a temporary service disruption — monitor for self-recovery. If it persists beyond 24 hours, open a support case referencing the "AI signature update" component.',
     source: 'nsdebuglog.log',
   },
+  {
+    id: 'ai-process-codepage-corruption', category: 'ai',
+    title: 'AI Discovery Process Path Corrupted — Non-ASCII Characters Truncated',
+    severity: 'info', icon: '🔤',
+    match: () => false,
+    matchState: s => {
+      const allLogs = Object.values(s.parsedLogs).flat();
+      const logHits = allLogs.filter(r => /GEF process path ANSI conversion error/i.test(r.msg));
+      const raw = s.files?.['ai_discovery_gef_debug.json'] || '';
+      const badPaths = raw ? (raw.match(/"process_path"\s*:\s*"[^"]*\?\?[^"]*"/gi) || []).length : 0;
+      if (!logHits.length && !badPaths) return false;
+      const parts = [];
+      if (logHits.length) parts.push(`${logHits.length} "GEF process path ANSI conversion error" in nsdebuglog`);
+      if (badPaths) parts.push(`${badPaths} corrupted path(s) with "??" in ai_discovery_gef_debug.json`);
+      return `AI Discovery process path corruption: ${parts.join('; ')} — CJK or multi-byte Unicode in executable paths is lost under ANSI codepage conversion`;
+    },
+    desc: 'Process executable paths containing CJK or multi-byte Unicode characters are corrupted or truncated to "??" in AI Discovery logs. Caused by Windows ANSI codepage conversion loss in the GEF process scanning module when the system locale is non-English. Affects AI agent detection accuracy for processes installed in localized paths.',
+    recommend: 'Upgrade to client R142+ which enables wide-character (UTF-8) process path extraction, eliminating the ANSI conversion step. As a workaround, install AI-discovered applications to ASCII-only paths. Reference ENG-1329460.',
+    source: 'AI Discovery — ENG-1329460',
+  },
 
   // ── R141 regression / new behavior checks ────────────────────────────────
   {
@@ -3866,6 +3893,63 @@ const ISSUE_PATTERNS = [
     source: 'R141 log analysis — all 3 bundles',
   },
   {
+    id: 'npa-prelogon-handshake-drop', category: 'npa',
+    title: 'NPA Pre-Logon TLS Close Notify Failure',
+    severity: 'high', icon: '🔐',
+    match: () => false,
+    matchState: s => {
+      const rows = Object.entries(s.parsedLogs)
+        .filter(([k]) => /npadebuglog/i.test(k))
+        .flatMap(([, r]) => r);
+      let found = 0;
+      for (let i = 0; i < rows.length; i++) {
+        if (/TLS client established connection.*:443/i.test(rows[i].raw || rows[i].msg)) {
+          const end = Math.min(i + 50, rows.length);
+          for (let j = i + 1; j < end; j++) {
+            if (/SSL3 alert write:warning:close notify|NPA status is (?:Errored|Disabled)|Failed to connect to prelogon tunnel/i.test(rows[j].raw || rows[j].msg)) {
+              found++;
+              i = j;
+              break;
+            }
+          }
+        }
+      }
+      if (!found) return false;
+      return `${found} pre-logon TLS handshake close-notify sequence(s) — pre-logon tunnel established then immediately terminated (ENG-1332052)`;
+    },
+    desc: 'Pre-logon tunnel established a TLS handshake with NPA gateway but closed immediately with a close notify alert or errored state. Root cause: device certificate missing from LocalMachine\\My, intermediate CA missing from tenant cert bundle, or CRL lookup failing.',
+    recommend: 'Verify device certificate in Cert:\\LocalMachine\\My, validate intermediate and root CA chain in tenant NPA settings, verify CRL endpoint reachability from the endpoint.',
+    source: 'ENG-1332052',
+  },
+  {
+    id: 'npa-prelogon-disable-desync', category: 'npa',
+    title: 'Pre-Logon Tunnel Reconnect Loop Despite Pre-Logon Disabled',
+    severity: 'medium', icon: '🔁',
+    match: () => false,
+    matchState: s => {
+      const cfg = s.files?.['nsconfig.json'] || '';
+      if (!/"prelogin_enabled"\s*:\s*0/.test(cfg)) return false;
+      const rows = Object.entries(s.parsedLogs)
+        .filter(([k]) => /npadebuglog/i.test(k))
+        .flatMap(([, r]) => r);
+      const hits = rows.filter(r => /Attempting pre.?logon tunnel connection|prelogon_helper.*Retry|poll timed out: no connection/i.test(r.msg));
+      if (!hits.length) return false;
+      return `pre-logon disabled in nsconfig.json (prelogin_enabled=0) but ${hits.length} pre-logon reconnect attempt(s) found — service restart required (ENG-1331095)`;
+    },
+    desc: 'Tenant configuration has disabled pre-logon (prelogin_enabled=0), but the client daemon continues reconnecting to the pre-logon tunnel. Agent service caches pre-logon state until fully restarted.',
+    recommend: 'Restart the Netskope Client service (stAgentSvc) or reboot the endpoint to clear cached pre-logon worker threads.',
+    source: 'ENG-1331095',
+  },
+  {
+    id: 'npa-peruser-unenrolled-bypass', category: 'npa',
+    title: 'Per-User Multi-Session Steering Gap — Session Before Enrollment Completes',
+    severity: 'high', icon: '👤',
+    match: r => /Per-user mode enabled.*session switch.*unregistered session|no active tunnel for session ID/i.test(r.msg),
+    desc: 'In multi-user or VDI environments, a new Windows user session starts and attempts NPA egress before per-user enrollment handshake completes. Traffic is dropped or bypassed during the timing gap.',
+    recommend: 'Check VDI per-user config flags in Client Configuration. Verify IdP session persistence across fast user switching. Reference ENG-1329649.',
+    source: 'ENG-1329649',
+  },
+  {
     id: 'bwan-binary-not-found', category: 'sdwan',
     title: 'BWAN Binary Called on Non-BWAN Device — R141 Regression',
     severity: 'warning', icon: '🗂️',
@@ -3873,6 +3957,73 @@ const ISSUE_PATTERNS = [
     desc: 'R141 introduced a regression where the NS Client calls bwanclient.exe update-onpremstatus even on machines that do not have BWAN installed. CreateProcess error 2 means the binary was not found. This generates log noise but does not impact SWG or NPA functionality.',
     recommend: 'Known R141 regression — no immediate remediation required. Monitor for a fix in the next client release. If this generates excessive log entries or performance concerns, open a case referencing the R141 bwanclient.exe update-onpremstatus regression.',
     source: 'R141 log analysis — WellSpan MIS322320 (Windows, not BWAN-enrolled)',
+  },
+  {
+    id: 'client-admin-status-flapping', category: 'config',
+    title: 'Admin Disable / Enable State Flapping',
+    severity: 'high', icon: '🔀',
+    match: () => false,
+    matchState: s => {
+      const allLogs = Object.values(s.parsedLogs).flat();
+      const hits = allLogs.filter(r => /clientStatusV2['":\s]+0|switching between Admin Disable Enable|Cannot enable the client.*Disabled by administrator/i.test(r.msg));
+      if (hits.length < 3) return false;
+      for (let i = 0; i <= hits.length - 3; i++) {
+        const t0 = new Date(hits[i].ts).getTime();
+        if (isNaN(t0)) continue;
+        const t2 = new Date(hits[i + 2].ts).getTime();
+        if (!isNaN(t2) && t2 - t0 <= 600000) {
+          return `${hits.length} admin disable/enable event(s), 3+ within 10 minutes — client flapping between Admin Disabled and Enabled states (ENG-1330253)`;
+        }
+      }
+      return false;
+    },
+    desc: 'The client is rapidly toggling between Admin Disabled and Admin Enabled states. Caused by conflicting group/OU assignments or race condition during rapid policy sync.',
+    recommend: 'Inspect OU group assignment priority in Netskope tenant console. Force client config refresh with `nsdiag -u`. References: ENG-1330253, ENG-1329882.',
+    source: 'ENG-1330253, ENG-1329882',
+  },
+  {
+    id: 'dynamic-steering-mode-stuck', category: 'config',
+    title: 'Pre-Logon Dynamic Steering Mode Desync — Driver Not Updated',
+    severity: 'medium', icon: '🔄',
+    match: r => /(?:Dynamic steering on-prem check changed|onpremcheck state switched).*(?:driver maintaining prior state|tunnel reconnect skipped)/i.test(r.msg),
+    desc: 'On-premises detection changes during pre-logon but the network filter driver remains locked to the prior steering profile. Pre-logon SYSTEM context prevents route table re-binding.',
+    recommend: 'Verify on-prem DNS/HTTP probe targets in steering configuration. Confirm probe host is resolvable in pre-logon environment. Reference ENG-1331639.',
+    source: 'ENG-1331639',
+  },
+  {
+    id: 'stagentsvc-ipc-startup-failure', category: 'config',
+    title: 'Pre-Logon Diagnostic IPC Unreachable (Session 0)',
+    severity: 'medium', icon: '🔌',
+    match: r => /IPC connect failure to stAgentSvc|nsdiag.*Failed to communicate with service|IPC pipe not available in session 0/i.test(r.msg),
+    desc: 'Diagnostic tools (nsdiag) fail to establish local IPC pipe communication with stAgentSvc. IPC listener not initialized until user profile loads — Session 0 cannot reach it.',
+    recommend: 'Run nsdiag from an elevated administrator command prompt after user logon, or allow the service startup grace period to complete. Reference ENG-1331092.',
+    source: 'ENG-1331092',
+  },
+  {
+    id: 'tun-relay-fin-truncation', category: 'tunnel',
+    title: 'Linux TUN Interface Early FIN — Relay Drops Pending Data',
+    severity: 'high', icon: '🐧',
+    match: r => /sta0.*server closed connection with pending bytes|relay closing socket before downstream flush|partial TLS record delivered on sta0/i.test(r.msg),
+    desc: 'On Linux clients, server-initiated FIN causes the local TCP relay (sta0) to close before flushing remaining buffered bytes to the local application. Known issue with third-party VPN portals (e.g. F5 BIG-IP Edge Client).',
+    recommend: 'Add the third-party VPN portal FQDNs to the client bypass list. Upgrade to R142+ which fixes this Linux TUN relay buffer flush defect. References: ENG-1335420, ENG-1335419.',
+    source: 'ENG-1335420, ENG-1335419',
+  },
+  {
+    id: 'explicit-proxy-pac-wildcard-fail', category: 'config',
+    title: 'Proxy Interop Wildcard in interopProxy_host — Resolution Failures',
+    severity: 'medium', icon: '🌐',
+    match: () => false,
+    matchState: s => {
+      const cfg = s.files?.['nsconfig.json'] || '';
+      if (!/"interopProxy_host"\s*:\s*"[^"]*\*[^"]*"/.test(cfg)) return false;
+      const allLogs = Object.values(s.parsedLogs).flat();
+      const hits = allLogs.filter(r => /interopProxy resolve failed|failed to parse proxy bypass host/i.test(r.msg));
+      if (!hits.length) return false;
+      return `Wildcard in interopProxy_host (nsconfig.json) + ${hits.length} proxy resolution failure(s) — wildcards unsupported here; replace with explicit FQDNs (SFDC-00001433)`;
+    },
+    desc: 'Wildcard pattern in interopProxy_host causes proxy chaining DNS/PAC resolution failures. The interopProxy_host field requires explicit FQDN or IP subnet ranges, not wildcard expressions.',
+    recommend: 'Replace wildcard entries in Interoperate with Proxy settings with exact hostnames or CIDR blocks. References: SFDC-00001433, SFDC-00001283.',
+    source: 'SFDC-00001433, SFDC-00001283',
   },
 
   // ── FLAP DETECTION (temporal correlation) ─────────────────────────────────
