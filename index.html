@@ -946,7 +946,7 @@ body {
 
 <script>
 // ─── Version ─────────────────────────────────────────────────────────────────
-const TOOL_VERSION = '1.12.4';
+const TOOL_VERSION = '1.12.5';
 
 // ─── State ────────────────────────────────────────────────────────────────────
 const state = {
@@ -1292,7 +1292,7 @@ async function loadZip(file) {
       'nssteering.json','nsbwanconfig.json','eventcache.json',
       'nsdeviceid.json','nsdeviceidstatus.json',
       'nsbwandebuglog.log','nsbwandebuglog_old.log','nsbwanclient.log','nsbwanuidebuglog.log',
-      'nsepdlpconfig.json','ai_discovery_gef_debug.json'];
+      'nsepdlpconfig.json','ai_discovery_gef_debug.json','infiot-client-config.json'];
 
     // Include the primary log + most recent rotated copy (.1.log only).
     // Also include all BWAN client logs (plain + gzip-compressed rotated).
@@ -3282,6 +3282,338 @@ const ISSUE_PATTERNS = [
     source: 'Borderless WAN',
   },
 
+  // ── BWAN: Tunnel Health ───────────────────────────────────────────────────
+  {
+    id: 'bwan-dtls-tls-fallback', category: 'sdwan',
+    title: 'BWAN Tunnel Fell Back from DTLS to TLS',
+    severity: 'warning', icon: '🔁',
+    match: () => false,
+    matchState: s => {
+      const rows = Object.entries(s.parsedLogs)
+        .filter(([k]) => /^nsbwandebug/.test(k))
+        .flatMap(([, r]) => r);
+      const dtlsFails = rows.filter(r => /dtls.*fail|fail.*dtls|dtls.*error|dtls.*timeout/i.test(r.msg));
+      const tlsFallback = rows.filter(r => /fall.?back.*tls|tls.*fall.?back|established.*tcp|tcp.*tunnel/i.test(r.msg));
+      if (!dtlsFails.length || !tlsFallback.length) return false;
+      return `DTLS failures (${dtlsFails.length}) followed by TLS fallback (${tlsFallback.length} events) — tunnel operating over TCP instead of UDP`;
+    },
+    desc: 'The BWAN tunnel attempted DTLS (UDP-based) but fell back to TLS over TCP. DTLS over UDP is required for optimal SD-WAN performance; a TCP fallback adds latency and is less resilient to packet loss. A second tunnel in a multi-hub Active/Active config stays DTLS-only and will fail when UDP is blocked, leaving only one active path.',
+    recommend: 'Verify UDP 4500 is open outbound to the Netskope BWAN PoP IPs. If behind a firewall or proxy that blocks UDP, work with the network team to allow DTLS. In a multi-hub setup, the secondary tunnel fails in DTLS-only mode if UDP is blocked — check PATH_COUNT in nsbwanclient.log to confirm both hubs are active.',
+    source: 'Borderless WAN Notes',
+  },
+  {
+    id: 'bwan-service-stopped', category: 'sdwan',
+    title: 'BWAN Tunnel Service Stopped Unexpectedly',
+    severity: 'high', icon: '⛔',
+    match: () => false,
+    matchState: s => {
+      const rows = Object.entries(s.parsedLogs)
+        .filter(([k]) => /^nsbwandebug/.test(k))
+        .flatMap(([, r]) => r);
+      const hits = rows.filter(r => /bwanClientSvc.*Received request to stop.*BWanSvc|BWanSvc.*stopping.*unexpect|bwansvc.*stop request/i.test(r.msg));
+      if (!hits.length) return false;
+      return `BWAN service received stop request ${hits.length} time(s) — tunnel service was halted. First: ${hits[0].ts || 'unknown time'}`;
+    },
+    desc: 'The BWAN tunnel service (BWanSvc) received a request to stop. If this was not user-initiated (sign-out or intentional service restart), it indicates an unexpected termination that drops all SD-WAN tunnels and halts routed traffic.',
+    recommend: 'Correlate the stop timestamp with NS Client events, user actions, and system events. If it coincides with a config push or update, verify the service auto-restarted. If unexpected, check for process crashes or OS-level service failures in Windows Event Viewer or macOS Console.',
+    source: 'Field Issues Summary Q3',
+  },
+  {
+    id: 'bwan-config-refresh-teardown', category: 'sdwan',
+    title: 'BWAN Tunnel Stopped After Config Refresh',
+    severity: 'warning', icon: '🔃',
+    match: () => false,
+    matchState: s => {
+      const rows = Object.entries(s.parsedLogs)
+        .filter(([k]) => /^nsbwandebug/.test(k))
+        .flatMap(([, r]) => r);
+      const configEvents = rows.filter(r => /new config received|config.*refresh|received.*new.*config/i.test(r.msg));
+      if (!configEvents.length) return false;
+      const stopEvents = rows.filter(r => /bwanClientSvc.*stop|BWanSvc.*stop|tunnel.*service.*stop/i.test(r.msg));
+      if (!stopEvents.length) return false;
+      let count = 0;
+      for (const cfg of configEvents) {
+        const cfgTs = new Date(cfg.ts).getTime();
+        if (isNaN(cfgTs)) continue;
+        if (stopEvents.some(st => {
+          const stTs = new Date(st.ts).getTime();
+          return stTs > cfgTs && stTs - cfgTs < 60000;
+        })) count++;
+      }
+      if (!count) return false;
+      return `${count} config refresh(es) followed by tunnel service stop within 60 seconds — matches WoodmenLife Jabber call-drop pattern`;
+    },
+    desc: 'The BWAN tunnel service stopped within 60 seconds of receiving a new configuration. This pattern was identified in the WoodmenLife escalation where Jabber calls dropped during BWAN config pushes — the tunnel restart caused brief connectivity loss for real-time applications.',
+    recommend: 'Confirm whether the BWAN service restart during config refresh is expected for this client version. If calls are dropping during maintenance windows, schedule config pushes outside peak hours. Upgrade to the latest BWAN client which may handle config refresh without tunnel teardown.',
+    source: 'Field Issues Summary Q3 — WoodmenLife escalation',
+  },
+  {
+    id: 'bwan-hub-flapping', category: 'sdwan',
+    title: 'BWAN Hub Flapping — Active/Active Instability (BWAN-4057)',
+    severity: 'warning', icon: '📡',
+    match: () => false,
+    matchState: s => {
+      const debugRows = Object.entries(s.parsedLogs)
+        .filter(([k]) => /^nsbwandebug/.test(k))
+        .flatMap(([, r]) => r);
+      const unreachable = debugRows.filter(r => /hub.*unreachable|unreachable.*hub|secondary.*hub.*fail|hub.*disconnect/i.test(r.msg));
+      if (unreachable.length < 2) return false;
+      const clientRows = Object.entries(s.parsedLogs)
+        .filter(([k]) => /^(?:nsbwan|bwan)client/.test(k))
+        .flatMap(([, r]) => r)
+        .filter(r => r.msg && r.msg.includes('PATH_COUNT:'));
+      const counts = clientRows.map(r => r.msg.match(/PATH_COUNT:\s*(\d+)/)?.[1]).filter(Boolean);
+      const changes = counts.filter((v, i) => i > 0 && v !== counts[i - 1]).length;
+      if (changes < 2) return false;
+      return `${unreachable.length} hub-unreachable event(s) with ${changes} PATH_COUNT changes — Active/Active hub flapping detected (BWAN-4057)`;
+    },
+    desc: 'Hub unreachability events alongside repeated PATH_COUNT oscillation indicate Active/Active hub instability. In BWAN-4057, a secondary hub becomes unreachable and both SD-WAN links flap, causing intermittent connectivity loss.',
+    recommend: 'Capture nsbwandebuglog, nsbwanclient.log, and a traceroute to both hub IPs during the next occurrence. Verify both hub PoPs are reachable via UDP 4500. Open a support case referencing BWAN-4057 with the hub IPs and timestamps.',
+    source: 'TD Bank 2026-07-01 — BWAN-4057',
+  },
+
+  // ── BWAN: Enrollment & Authentication ─────────────────────────────────────
+  {
+    id: 'bwan-cert-unavailable', category: 'sdwan',
+    title: 'BWAN User Certificate Unavailable or Expired',
+    severity: 'high', icon: '📜',
+    match: () => false,
+    matchState: s => {
+      const rows = Object.entries(s.parsedLogs)
+        .filter(([k]) => /^(?:nsbwan|bwan)/.test(k))
+        .flatMap(([, r]) => r);
+      const hits = rows.filter(r => /user certificate unavailable|certificate.*unavailable|cert.*expired|cert.*invalid|cert.*parse.*fail|fail.*cert.*parse/i.test(r.msg));
+      if (!hits.length) return false;
+      return `${hits.length} certificate error(s): "${hits[0].msg.slice(0, 120)}"`;
+    },
+    desc: 'The BWAN client cannot access a valid user certificate. This was the root cause of the Natixis escalation involving a 9-year-old expired certificate in the Windows certificate store. Without a valid cert, BWAN cannot complete mutual TLS authentication and no tunnel can be established.',
+    recommend: 'Check the Windows certificate store (certmgr.msc) for the user certificate used by BWAN. Verify it is not expired or revoked. Re-issue the certificate from the CA if needed. For Natixis-pattern issues with very old certs, review the BWAN certificate selection policy to filter expired certs.',
+    source: 'Field Issues Summary Q3 — Natixis escalation',
+  },
+  {
+    id: 'bwan-device-creation-error', category: 'sdwan',
+    title: 'BWAN Device Already Enrolled — ERROR_DEVICE_CREATION',
+    severity: 'warning', icon: '📋',
+    match: () => false,
+    matchState: s => {
+      const rows = Object.entries(s.parsedLogs)
+        .filter(([k]) => /^(?:nsbwan|bwan)/.test(k))
+        .flatMap(([, r]) => r);
+      const hits = rows.filter(r => /ERROR_DEVICE_CREATION/i.test(r.msg));
+      if (!hits.length) return false;
+      return `ERROR_DEVICE_CREATION detected ${hits.length} time(s) — device likely already registered in the BWAN portal`;
+    },
+    desc: 'The BWAN client is receiving ERROR_DEVICE_CREATION during enrollment, meaning the device already has a record in the BWAN management portal. A re-enrollment attempt conflicts with the existing record.',
+    recommend: 'In the Netskope admin console → Endpoint SD-WAN → Devices, locate this device by name or ID and delete the stale record. Then stop the NS Client, delete the BWAN activation data (C:\\ProgramData\\Netskope\\bwan on Windows), and restart to trigger fresh enrollment.',
+    source: 'Field Issues Summary Q3',
+  },
+  {
+    id: 'bwan-idp-auth-failure', category: 'sdwan',
+    title: 'BWAN IDP Authentication Failed',
+    severity: 'warning', icon: '🔐',
+    match: () => false,
+    matchState: s => {
+      const rows = Object.entries(s.parsedLogs)
+        .filter(([k]) => /^(?:nsbwan|bwan)/.test(k))
+        .flatMap(([, r]) => r);
+      const hits = rows.filter(r => /User Authentication Failure|authentication failure|auth.*failure|failed.*authenticate/i.test(r.msg));
+      if (!hits.length) return false;
+      return `${hits.length} IDP authentication failure(s) — user may have closed the browser or authentication timed out`;
+    },
+    desc: 'The BWAN IDP authentication flow failed. This typically occurs when the user closes the IdP browser window without completing the flow, or when the authentication request times out. Without a successful IDP auth, BWAN cannot obtain a refresh token and enrollment cannot complete.',
+    recommend: 'Ask the user to re-initiate BWAN enrollment and complete IdP authentication without closing the browser. If failures persist, verify IdP connectivity and check that the BWAN authentication URL is not blocked by a browser security policy or extension.',
+    source: 'PRD BWAN Client Windows Events',
+  },
+  {
+    id: 'bwan-idp-session-expired', category: 'sdwan',
+    title: 'BWAN IDP Session Expired — Re-Authentication Required',
+    severity: 'info', icon: '🕐',
+    match: () => false,
+    matchState: s => {
+      const rows = Object.entries(s.parsedLogs)
+        .filter(([k]) => /^(?:nsbwan|bwan)/.test(k))
+        .flatMap(([, r]) => r);
+      const hits = rows.filter(r => /User Session Expired|session.*expired|token.*expired|refresh.*token.*expir/i.test(r.msg));
+      if (!hits.length) return false;
+      return `${hits.length} session expiry event(s) — BWAN re-authentication needed`;
+    },
+    desc: 'The BWAN IDP session or refresh token has expired. Re-authentication is needed to obtain a new token and continue tunnel operation. Frequent expiry can cause unexpected tunnel loss if the user is not prompted.',
+    recommend: 'The user should re-authenticate via NS Client tray → Sign In. If session expiry is happening too frequently, review the IdP token lifetime and BWAN re-auth interval. If SSO is configured, re-auth should not require a password entry.',
+    source: 'PRD BWAN Client Windows Events',
+  },
+  {
+    id: 'bwan-saml-proxy-failure', category: 'sdwan',
+    title: 'BWAN SAML Auth Failing with Forward Proxy (ENG-495265)',
+    severity: 'warning', icon: '🔄',
+    match: () => false,
+    matchState: s => {
+      const rows = Object.entries(s.parsedLogs)
+        .filter(([k]) => /^(?:nsbwan|bwan)/.test(k))
+        .flatMap(([, r]) => r);
+      const samlFails = rows.filter(r => /saml.*fail|fail.*saml|saml.*error|auth.*domain.*fail/i.test(r.msg));
+      if (!samlFails.length) return false;
+      const proxyIndicator = rows.some(r => /forward.*proxy|proxy.*forward|user.*authentication.*domain/i.test(r.msg))
+        || /forwardproxy|forward_proxy/i.test(s.files?.['nsconfig.json'] || '');
+      if (!proxyIndicator) return false;
+      return `${samlFails.length} SAML auth failure(s) with forward proxy indicator — matches ENG-495265`;
+    },
+    desc: 'SAML authentication is failing in conjunction with a forward proxy or "User Authentication Domain" setting. This is tracked as ENG-495265 — the BWAN SAML flow does not properly handle authentication challenges when a forward proxy is in the path.',
+    recommend: 'Reference ENG-495265 when opening a support case. Bypass the forward proxy for BWAN authentication endpoints. If using Netskope as the proxy, ensure the BWAN auth URL is in the certificate-pinned bypass list.',
+    source: 'TD Bank 2026-07-01 — ENG-495265',
+  },
+
+  // ── BWAN: Config & State ──────────────────────────────────────────────────
+  {
+    id: 'bwan-fail-close-active', category: 'sdwan',
+    title: 'BWAN Fail-Close Enabled — No Active Tunnel',
+    severity: 'high', icon: '🚫',
+    match: () => false,
+    matchState: s => {
+      const infiot = s.files?.['infiot-client-config.json'] || '';
+      if (!infiot) return false;
+      if (!/"failclose_enable"\s*:\s*true/i.test(infiot)) return false;
+      const clientRows = Object.entries(s.parsedLogs)
+        .filter(([k]) => /^(?:nsbwan|bwan)client/.test(k))
+        .flatMap(([, r]) => r);
+      const pathEvents = clientRows.filter(r => r.msg && r.msg.includes('PATH_COUNT:'));
+      const lastPath = pathEvents[pathEvents.length - 1];
+      const tunnelDown = !s.bwanTunnel?.connected
+        || (lastPath && /PATH_COUNT:\s*0\b/.test(lastPath.msg));
+      if (!tunnelDown) return false;
+      return 'BWAN fail-close is ENABLED and the tunnel is currently down — all local traffic except DHCP/DNS is blocked on this endpoint';
+    },
+    desc: 'BWAN fail-close mode is active and the SD-WAN tunnel is down. In fail-close mode, all traffic is dropped when the tunnel is unavailable, except for DHCP and DNS. This means the endpoint has no internet or corporate network access until the tunnel is restored.',
+    recommend: 'Critical — the user cannot reach anything. Restore the BWAN tunnel: check hub reachability, re-authenticate if needed, restart the NS Client. If fail-close is not intentional for this device group, disable it in Endpoint SD-WAN → Policies. Ensure devices with fail-close are monitored for tunnel health.',
+    source: 'Endpoint SD-WAN Fail Close Support',
+  },
+  {
+    id: 'bwan-disable-not-restricted', category: 'sdwan',
+    title: 'BWAN Client Disable Allowed with Fail-Close Enabled',
+    severity: 'warning', icon: '⚠️',
+    match: () => false,
+    matchState: s => {
+      const infiot = s.files?.['infiot-client-config.json'] || '';
+      if (!infiot) return false;
+      if (!/"failclose_enable"\s*:\s*true/i.test(infiot)) return false;
+      if (!/"allow_disable_client"\s*:\s*true/i.test(infiot)) return false;
+      return 'BWAN fail-close is enabled but allow_disable_client is also true — a user can disable the NS Client and bypass fail-close protection';
+    },
+    desc: 'BWAN fail-close is enabled (to enforce all traffic through the SD-WAN tunnel) but allow_disable_client is also true. This means a user can manually disable the NS Client from the system tray, bypassing the fail-close policy entirely.',
+    recommend: 'When fail-close is enabled, allow_disable_client should be false. In the admin console → NS Client configuration, disable "Allow users to disable NS Client" for any group with BWAN fail-close. These settings are documented as mutually exclusive.',
+    source: 'PRD BWAN Client Fail Close',
+  },
+  {
+    id: 'bwan-onprem-detected', category: 'sdwan',
+    title: 'BWAN On-Premises Mode Active — Tunnel Stopped',
+    severity: 'info', icon: '🏢',
+    match: () => false,
+    matchState: s => {
+      const rows = Object.entries(s.parsedLogs)
+        .filter(([k]) => /^(?:nsbwan|bwan)/.test(k))
+        .flatMap(([, r]) => r);
+      const hits = rows.filter(r => /on.?prem.*detect|detect.*on.?prem|on-prem.*mode|bwan.*on.?prem.*stop|tunnel.*manager.*stop/i.test(r.msg));
+      if (!hits.length) return false;
+      return `${hits.length} on-prem detection event(s) — BWAN tunnel manager stopped because device appears to be on the corporate network`;
+    },
+    desc: 'The BWAN client detected on-premises connectivity and stopped the SD-WAN tunnel. This is expected — BWAN is for off-premises access. On-prem detection runs on network changes, so a brief false-positive can occur on wake or after switching networks.',
+    recommend: 'Verify the device location matches the detection. If the device is off-premises but BWAN is stopping incorrectly, review the on-prem detection criteria (split DNS, subnets, gateway detection) in the BWAN policy. A false-positive causes a connectivity gap on every network change.',
+    source: 'Borderless WAN',
+  },
+
+  // ── BWAN: Traffic & Dataplane ─────────────────────────────────────────────
+  {
+    id: 'bwan-default-policy-hit', category: 'sdwan',
+    title: 'BWAN Traffic Matching Default Catch-All Policy',
+    severity: 'warning', icon: '🔀',
+    match: () => false,
+    matchState: s => {
+      const all = [
+        ...(s.bwanFlows?.tunnelFlows || []),
+        ...(s.bwanFlows?.directFlows || [])
+      ].filter(f => /^default$/i.test(f.policy));
+      if (!all.length) return false;
+      const dsts = [...new Set(all.map(f => f.dstIp))].slice(0, 5).join(', ');
+      return `${all.length} BWAN flow(s) matched the default policy instead of a specific AppX rule — sample destinations: ${dsts}`;
+    },
+    desc: 'One or more BWAN flows matched the catch-all default policy rather than a specific AppX rule. Traffic matching the default policy may not be routed optimally and indicates the AppX policy has gaps for these destinations.',
+    recommend: 'Review the destination IPs hitting the default policy and create explicit AppX rules for corporate applications. The default policy is a fallback — production traffic hitting it means policy coverage has a gap.',
+    source: 'GTF Log Analyzer — BWAN traffic analysis',
+  },
+  {
+    id: 'bwan-keepalive-failure', category: 'sdwan',
+    title: 'BWAN Keep-Alive Failures Before Tunnel Drop',
+    severity: 'warning', icon: '💔',
+    match: () => false,
+    matchState: s => {
+      const rows = Object.entries(s.parsedLogs)
+        .filter(([k]) => /^nsbwandebug/.test(k))
+        .flatMap(([, r]) => r);
+      const kaFails = rows.filter(r => /keep.?alive.*fail|keepalive.*fail|fail.*keep.?alive|heartbeat.*fail|probe.*fail/i.test(r.msg));
+      if (!kaFails.length) return false;
+      const pathDown = rows.some(r => /PATH_COUNT:\s*0|tunnel.*down/i.test(r.msg));
+      return `${kaFails.length} keep-alive failure(s)${pathDown ? ', followed by tunnel down' : ''} — hub probe not responding`;
+    },
+    desc: 'Keep-alive or heartbeat failures were detected before a tunnel drop. This confirms the hub was unreachable rather than the tunnel being administratively stopped.',
+    recommend: 'Check the network path to BWAN hub IPs — UDP 4500 for DTLS, TCP 443 for TLS fallback. If keep-alive failures are intermittent, check for packet loss or firewall rate-limiting on the UDP path.',
+    source: 'GTF Log Analyzer',
+  },
+  {
+    id: 'bwan-multiuser-unsupported', category: 'sdwan',
+    title: 'Multiple Users Logged In While BWAN Enrolled (BWAN-5984)',
+    severity: 'info', icon: '👥',
+    match: () => false,
+    matchState: s => {
+      const rows = Object.entries(s.parsedLogs)
+        .filter(([k]) => /^(?:nsbwan|bwan)/.test(k))
+        .flatMap(([, r]) => r);
+      const hits = rows.filter(r => /multiple.*user|multi.?user|concurrent.*user|additional.*user.*login/i.test(r.msg));
+      if (!hits.length) return false;
+      return `${hits.length} multi-user event(s) — BWAN does not support concurrent user sessions (BWAN-5984)`;
+    },
+    desc: 'The BWAN client detected multiple concurrent user sessions. Multi-user configurations (fast user switching, shared machines, RDS/Citrix) are not supported by the BWAN client (BWAN-5984) and can destabilize the tunnel.',
+    recommend: 'BWAN should only be deployed on single-user endpoints. For shared machines or RDS hosts, exclude the device group from BWAN. If fast user switching is required, open a case referencing BWAN-5984.',
+    source: 'TD Bank 2026-07-01 — BWAN-5984',
+  },
+
+  // ── BWAN: Virtual Adapter & Driver ────────────────────────────────────────
+  {
+    id: 'bwan-adapter-creation-failure', category: 'sdwan',
+    title: 'BWAN Virtual Adapter Creation Failed',
+    severity: 'high', icon: '🖧',
+    match: () => false,
+    matchState: s => {
+      const rows = Object.entries(s.parsedLogs)
+        .filter(([k]) => /^nsbwandebug/.test(k))
+        .flatMap(([, r]) => r);
+      const hits = rows.filter(r => /adapter.*creation.*fail|fail.*adapter.*creat|virtual.*adapter.*error|create.*adapter.*fail|TapDevice.*fail/i.test(r.msg));
+      if (!hits.length) return false;
+      return `${hits.length} virtual adapter creation failure(s) — BWAN cannot establish its TAP/TUN interface`;
+    },
+    desc: 'The BWAN client failed to create its virtual network adapter. Without this adapter, the BWAN overlay cannot route traffic even if tunnel negotiation succeeds. R108.2 added an auto-recovery mechanism but it is behind a feature flag.',
+    recommend: 'Restart the NS Client to trigger adapter re-creation. If it recurs, check for conflicting VPN software or network drivers holding the adapter interface. Verify the Netskope BWAN virtual adapter driver is installed and enabled in Device Manager. Request the R108.2+ auto-recovery feature flag from Netskope support if failures are repeated.',
+    source: 'TD Bank 2026-07-01',
+  },
+  {
+    id: 'bwan-adapter-conflict', category: 'sdwan',
+    title: 'BWAN Virtual Adapter Errors — Possible Driver Conflict',
+    severity: 'warning', icon: '⚡',
+    match: () => false,
+    matchState: s => {
+      const rows = Object.entries(s.parsedLogs)
+        .filter(([k]) => /^nsbwandebug/.test(k))
+        .flatMap(([, r]) => r);
+      const adapterErrors = rows.filter(r =>
+        /adapter.*error|error.*adapter|TAP.*error|TUN.*error|interface.*error|virtual.*nic.*error/i.test(r.msg)
+        && !/creation.*fail|fail.*creat/.test(r.msg)
+      );
+      if (adapterErrors.length < 2) return false;
+      return `${adapterErrors.length} virtual adapter error(s) in BWAN debug log — possible driver conflict or interface instability`;
+    },
+    desc: 'Repeated virtual adapter errors are present in the BWAN debug log, separate from creation failures. These may indicate a driver conflict with other VPN software, or OS-level driver instability causing the BWAN tunnel interface to be unreliable.',
+    recommend: 'Check for other VPN software (Cisco AnyConnect, GlobalProtect, etc.) that creates virtual adapters. Run "netsh int show interface" (Windows) or "ifconfig -a" (macOS) during a failure to identify duplicate or failed interface states. Escalate with the nsbwandebuglog if errors correlate with tunnel drops.',
+    source: 'Borderless WAN Notes',
+  },
+
   {
     id: 'npa-exceptions-offprem-only', category: 'npa',
     title: 'NPA Exceptions — Off-Prem Only, No On-Prem Coverage',
@@ -3409,6 +3741,50 @@ const ISSUE_PATTERNS = [
     desc: 'Log entries show the AI signature update request is failing with an HTTP error. The AI signature database defines what constitutes an AI agent, browser extension, or LLM server — without updates, newly released AI tools may not be detected.',
     recommend: 'Check connectivity to the Netskope signature update endpoint. If consistent 502 errors appear, this may be a temporary service disruption — monitor for self-recovery. If it persists beyond 24 hours, open a support case referencing the "AI signature update" component.',
     source: 'nsdebuglog.log',
+  },
+
+  // ── R141 regression / new behavior checks ────────────────────────────────
+  {
+    id: 'macos-tcc-missing', category: 'config',
+    title: 'macOS Full Disk Access (TCC) Not Granted — ESMon Non-Functional',
+    severity: 'high', icon: '🔒',
+    match: r => /Netskope Client lacks TCC approval/i.test(r.msg),
+    desc: 'The Netskope Client is repeatedly reporting that Full Disk Access (TCC) has not been granted. Without TCC approval, the ESMon component cannot scan files, making EPDLP, malware scanning, and file-based policies non-functional. On macOS 15 (Tahoe), the TCC prompt may not automatically appear after an OS upgrade.',
+    recommend: 'Go to System Settings → Privacy & Security → Full Disk Access and enable "Netskope Client". On macOS 15 (Tahoe), FDA approval from prior macOS versions may not carry over — re-grant it manually. This is a known R141 / macOS 15 issue. Restart the NS Client after granting access.',
+    source: 'R141 log analysis — WellSpan MIS260997 (macOS 15)',
+  },
+  {
+    id: 'event-cache-integrity-loop', category: 'config',
+    title: 'Event Cache Integrity Loop — nsinternal.json Schema Mismatch (R141)',
+    severity: 'warning', icon: '🔄',
+    match: () => false,
+    matchState: s => {
+      const allLogs = Object.values(s.parsedLogs).flat();
+      const hits = allLogs.filter(r => /integritycheck/i.test(r.msg) && /No such node.*d9|d9.*No such node/i.test(r.msg));
+      if (hits.length < 3) return false;
+      return `${hits.length} repeated integritycheck "No such node: d9" errors — nsinternal.json missing R141 schema field, likely an in-place upgrade issue`;
+    },
+    desc: 'The NS Client is logging repeated "Parsing error No such node: d9" from the integrity check component. The "d9" node was added to nsinternal.json\'s schema in R141, but is only written on fresh installs — in-place upgrades leave it missing, causing a continuous integrity check loop.',
+    recommend: 'Stop the NS Client service, delete nsinternal.json from the Netskope data directory (C:\\ProgramData\\Netskope on Windows, /Library/Application Support/Netskope on macOS), and restart. The client regenerates the file with the correct R141 schema. Open a case referencing the R141 nsinternal.json schema migration if this affects multiple upgraded devices.',
+    source: 'R141 log analysis — WellSpan MIS260997',
+  },
+  {
+    id: 'npa-standby-recovery', category: 'npa',
+    title: 'NPA Tunnel Torn Down During System Standby',
+    severity: 'info', icon: '💤',
+    match: r => /tunnel was torn down during standby/i.test(r.msg),
+    desc: 'The NPA tunnel was disconnected when the device entered sleep/standby. This is expected — the NPA tunnel does not persist across sleep cycles. Surfaced here when the event appears frequently, which may indicate rapid sleep-wake cycles or a tunnel failing to recover on wake.',
+    recommend: 'Expected in normal operation — no action required unless post-wake recovery takes more than 30 seconds. If the tunnel repeatedly fails to re-establish after standby, check for NPA flap patterns or authentication failures on wake.',
+    source: 'R141 log analysis — all 3 bundles',
+  },
+  {
+    id: 'bwan-binary-not-found', category: 'sdwan',
+    title: 'BWAN Binary Called on Non-BWAN Device — R141 Regression',
+    severity: 'warning', icon: '🗂️',
+    match: r => /CreateProcess error 2/i.test(r.msg) && /bwanclient\.exe.*update-onpremstatus|update-onpremstatus.*bwanclient\.exe/i.test(r.msg),
+    desc: 'R141 introduced a regression where the NS Client calls bwanclient.exe update-onpremstatus even on machines that do not have BWAN installed. CreateProcess error 2 means the binary was not found. This generates log noise but does not impact SWG or NPA functionality.',
+    recommend: 'Known R141 regression — no immediate remediation required. Monitor for a fix in the next client release. If this generates excessive log entries or performance concerns, open a case referencing the R141 bwanclient.exe update-onpremstatus regression.',
+    source: 'R141 log analysis — WellSpan MIS322320 (Windows, not BWAN-enrolled)',
   },
 
   // ── FLAP DETECTION (temporal correlation) ─────────────────────────────────
