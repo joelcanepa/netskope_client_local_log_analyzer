@@ -946,7 +946,7 @@ body {
 
 <script>
 // ─── Version ─────────────────────────────────────────────────────────────────
-const TOOL_VERSION = '1.12.5';
+const TOOL_VERSION = '1.12.6';
 
 // ─── State ────────────────────────────────────────────────────────────────────
 const state = {
@@ -2716,6 +2716,94 @@ const ISSUE_PATTERNS = [
     source: 'Interop Troubleshooting',
   },
 
+  // ── EPDLP: GTF v1.15.0 checks (from epdlp_sys_log) ──────────────────────
+  {
+    id: 'gtf-epdlp-active', category: 'epdlp',
+    title: 'EPDLP Is Actively Evaluating Policy',
+    severity: 'info', icon: '✅',
+    match: () => false,
+    matchState: s => {
+      const sysLog = s.files?.['epdlp_sys_log.log'] || '';
+      if (!sysLog) return false;
+      const m = sysLog.match(/PolicyWorker\s+\d+:\s+evaluated\s+event/gi);
+      if (!m) return false;
+      return `${m.length.toLocaleString()} EPDLP policy evaluation(s) confirmed in epdlp_sys_log — EPDLP is active and processing events on this device.`;
+    },
+    desc: 'Positive signal — EPDLP processed at least one policy evaluation in the captured log window. Distinguishes an active deployment from one that is installed but has had no DLP activity.',
+    recommend: 'No action required. Use this as a baseline confirmation when troubleshooting EPDLP issues — its absence when events are expected may indicate EPDLP is not running or not intercepting events.',
+    source: 'GTF EPDLP checks v1.15.0 — epdlp_sys_log',
+  },
+  {
+    id: 'gtf-epdlp-fallback', category: 'epdlp',
+    title: 'EPDLP Fallback — DLP Policy Evaluation Bypassed',
+    severity: 'high', icon: '⚠️',
+    match: () => false,
+    matchState: s => {
+      const sysLog = s.files?.['epdlp_sys_log.log'] || '';
+      if (!sysLog) return false;
+      const re = /PolicyWorker\s+\d+:\s+evaluated\s+event\s+[0-9a-f-]+\s+with\s+result\s+"\w+"\s+with\s+action\s+"\w+"\s+for\s+rule\s+"(Offline fallback|Error fallback|Max file size fallback)"/gi;
+      const types = [];
+      let m;
+      while ((m = re.exec(sysLog)) !== null) types.push(m[1]);
+      if (!types.length) return false;
+      const counts = {};
+      for (const t of types) counts[t] = (counts[t] || 0) + 1;
+      const summary = Object.entries(counts).map(([t, n]) => `"${t}" (${n}×)`).join(', ');
+      return `${types.length} EPDLP fallback evaluation(s) — real DLP inspection was bypassed: ${summary}`;
+    },
+    desc: 'One or more EPDLP policy evaluations used a fallback sentinel rule instead of real DLP inspection. Fallback types: "Offline fallback" (gateway unreachable), "Error fallback" (evaluation error), "Max file size fallback" (file too large). The configured fallback action is applied without content scanning.',
+    recommend: 'Offline fallback: verify connectivity to *.epdlp.goskope.com (MP/DP gateway). Error fallback: check epdlp_sys_log for errors preceding the fallback event. Max file size fallback: review the file-size limit in tenant_config.json.',
+    source: 'GTF EPDLP checks v1.15.0 — epdlp_sys_log',
+  },
+  {
+    id: 'gtf-epdlp-offline-fallback', category: 'epdlp',
+    title: 'EPDLP Offline Fallback — Gateway Unreachable',
+    severity: 'warning', icon: '📴',
+    match: () => false,
+    matchState: s => {
+      const sysLog = s.files?.['epdlp_sys_log.log'] || '';
+      if (!sysLog) return false;
+      const count = (sysLog.match(/PolicyWorker\s+\d+:\s+evaluated\s+event\s+[0-9a-f-]+\s+with\s+result\s+"\w+"\s+with\s+action\s+"\w+"\s+for\s+rule\s+"Offline fallback"/gi) || []).length;
+      if (!count) return false;
+      return `${count} "Offline fallback" evaluation(s) in epdlp_sys_log — EPDLP could not reach the gateway and applied the offline-fallback action to these events.`;
+    },
+    desc: 'Subset of gtf-epdlp-fallback: specifically identifies evaluations where EPDLP was offline (could not reach *.epdlp.goskope.com). When paired with the broader fallback check, this narrows the root cause to a gateway connectivity issue.',
+    recommend: 'Check MP/DP gateway connectivity. Verify the device can reach the assigned mediation point (nsconfig.json epdlp_mp / environment.json epdlp_mp). Check for captive portal, proxy, or firewall blocking *.epdlp.goskope.com.',
+    source: 'GTF EPDLP checks v1.15.0 — epdlp_sys_log',
+  },
+  {
+    id: 'gtf-epdlp-cert-error', category: 'epdlp',
+    title: 'EPDLP Certificate Error',
+    severity: 'high', icon: '🔐',
+    match: () => false,
+    matchState: s => {
+      const sysLog = s.files?.['epdlp_sys_log.log'] || '';
+      if (!sysLog) return false;
+      const count = (sysLog.match(/libcurl SSL certificate problem|getFileFromSignedUrl error|SSL peer certificate or SSH remote key was not OK/gi) || []).length;
+      if (!count) return false;
+      return `${count} EPDLP certificate error(s) in epdlp_sys_log — SSL certificate validation is failing on EPDLP gateway connections.`;
+    },
+    desc: 'EPDLP encountered a certificate validation error connecting to Netskope cloud infrastructure. Typically indicates an SSL-inspection proxy intercepting the mTLS connection, an incomplete root CA trust store, or system clock drift causing spurious expiry failures.',
+    recommend: 'Check for SSL-inspecting proxies on the path to *.epdlp.goskope.com and add it to bypass. Verify the Netskope CA is in the system trust store. Check system clock accuracy. If a third-party security product performs SSL inspection, exclude *.epdlp.goskope.com.',
+    source: 'GTF EPDLP checks v1.15.0 — epdlp_sys_log',
+  },
+  {
+    id: 'gtf-epdlp-proxy-agent', category: 'epdlp',
+    title: 'EPDLP Requests Traversing Proxy Agent',
+    severity: 'medium', icon: '🔀',
+    match: () => false,
+    matchState: s => {
+      const sysLog = s.files?.['epdlp_sys_log.log'] || '';
+      if (!sysLog) return false;
+      const count = (sysLog.match(/Proxy-Agent/g) || []).length;
+      if (!count) return false;
+      return `${count} "Proxy-Agent" reference(s) in epdlp_sys_log — EPDLP outbound requests are traversing a proxy.`;
+    },
+    desc: 'EPDLP outbound requests show a Proxy-Agent header, indicating traffic is traversing a local proxy. Not always a problem on its own — check for correlated EPDLP certificate errors or gateway connectivity failures which may confirm the proxy is breaking the mTLS connection.',
+    recommend: 'If EPDLP connectivity issues are also present, verify the proxy allows *.epdlp.goskope.com without SSL interception. If no other EPDLP issues exist, this reflects expected proxy usage and can be dismissed.',
+    source: 'GTF EPDLP checks v1.15.0 — epdlp_sys_log',
+  },
+
   // ── INFORMATIONAL / BENIGN NOISE ──────────────────────────────────────────
   {
     id: 'install-eventcache-empty', category: 'noise',
@@ -3974,6 +4062,85 @@ const GTF_CHECKS = [
     desc:'The NPA client handler stopped or failed to register — distinct from an NPA broker being unreachable. This is the client\'s own enrollment process failing, typically due to an expired NPA token, a failed discovery call to the NPA service, or a stale client handler state.',
     rx:'Re-enroll the NPA client from the Netskope console (Users → select user → Re-enroll NPA). If the discovery call failed, verify connectivity to the NPA enrollment endpoint. Check whether the NPA token has expired and issue a new one.',
     pat:'/ClientHandler stopped/i | /[Rr]egistration failed.*discovery call/i | /NPA.*registration.*failed/i | /npaClientHandler.*stopped/i' },
+  // ── Tunnel & Config (GTF v1.15.0) ─────────────────────────────────────────
+  { id:'C-TUNNEL-FAIL', sev:'critical', cat:'tunnel', thr:1, thOp:'>=',
+    title:'Tunnel failed to establish',
+    desc:'The client completely failed to connect to a Netskope gateway — not just a disconnect, but a failure to establish the tunnel at all. Indicates the gateway is unreachable, DNS is failing, or firewall is blocking.',
+    rx:'Check if gateway IPs are reachable (telnet to goskope.com:443). Verify DNS resolution. Check if corporate firewall blocks port 443 TCP/UDP to Netskope gateway ranges.',
+    pat:'/failed to establish NSTunnel/i' },
+  { id:'C-CFG-DOWNLOAD', sev:'critical', cat:'config', thr:1, thOp:'>=',
+    title:'Configuration download failed',
+    desc:'The client could not download a required configuration file. Without these, the tunnel cannot establish. This is a blocking condition.',
+    rx:'Check network connectivity to Netskope management plane. Verify the user is provisioned. Check if firewalls block *.goskope.com or *.netskope.com.',
+    pat:'/Config [Ff]ailed to download/i' },
+  { id:'C-CERT', sev:'critical', cat:'tunnel', thr:1, thOp:'>=',
+    title:'Certificate verification failures (nsssl)',
+    desc:'nsssl SSL_read failures indicate the client cannot verify the Netskope gateway certificate. Points to a root CA issue, an expired cert, or SSL inspection by an intermediate device stripping the real cert.',
+    rx:'Check if SSL inspection is enabled on corporate proxies or firewalls. Verify Netskope root CA is trusted. Add Netskope gateway domains to SSL inspection bypass.',
+    pat:'/nsssl (?:DTLS|TLS) SSL_read failed, err:/i' },
+  { id:'C-USERCERT', sev:'critical', cat:'auth', thr:1, thOp:'>=',
+    title:'User certificate failure',
+    desc:'The user certificate is required for all v7 API calls to the Netskope management plane. Without it, config downloads fail with 401, auto-upgrade stalls, and the client runs on stale policies indefinitely.',
+    rx:'Re-enroll the client with a fresh enrollment token. Compare nsusercert.p12.enc modification date to last successful config download timestamp.',
+    pat:'/Config Failed to download user cert|Failed to read user certificate|Invalid decryption of protected file:.*nsusercert\\.p12\\.enc/i' },
+  { id:'C-DNS-RESOLVE', sev:'critical', cat:'tunnel', thr:1, thOp:'>=',
+    title:'DNS resolution failure for Netskope gateway',
+    desc:'The Netskope client failed to resolve a gateway FQDN. The client cannot reach the NewEdge gateway and traffic steering will fail.',
+    rx:'Verify DNS is functional on the device. Check that split-DNS or corporate DNS is not blocking *.goskope.com / *.netskope.com resolution. Confirm the device has internet connectivity.',
+    pat:'/Failed to resolve GW/i' },
+  { id:'W-TUNNEL-DISC', sev:'warning', cat:'tunnel', thr:3, thOp:'>=',
+    title:'Repeated tunnel disconnections with error reasons',
+    desc:'Disconnections with SSL_ERROR, DPD timeout, PING_TIMEOUT, or NW_ERROR reason codes indicate the network path is unstable or the gateway is rejecting the client. Normal disconnections (BYUSER, BYADMIN, BYNETWORKCHANGE) are excluded.',
+    rx:'Check network stability on the path to Netskope gateways. Consider switching PoP if a specific gateway is consistently failing.',
+    pat:'/NSTUNNEL_DOWN_ERROR_(?:SSL_ERROR|DPD|PING_TIMEOUT|NW_ERROR)|UNKNOWN_RSN_/i' },
+  { id:'W-ONPREM-HTTP', sev:'warning', cat:'config', thr:1, thOp:'>=',
+    title:'On-prem HTTP detection failing',
+    desc:'The client uses HTTP probing to determine if it is on the corporate network. Failure may cause incorrect steering policy to be applied.',
+    rx:'Verify the on-prem detection HTTP host is reachable. Consider switching to DNS or Egress IP based detection as a more reliable alternative.',
+    pat:'/on-prem detection using HTTP failed/i' },
+  { id:'W-CURL', sev:'warning', cat:'config', thr:3, thOp:'>',
+    title:'HTTP connectivity failures to Netskope',
+    desc:'Multiple curl_easy_perform failures mean the client cannot make HTTP requests to Netskope management plane endpoints. This affects config sync, telemetry, and enrollment.',
+    rx:'Check firewall rules blocking *.goskope.com and *.netskope.com. Check proxy configuration for Netskope management traffic.',
+    pat:'/curl_easy_perform failed/i' },
+  // ── SD-WAN (GTF v1.15.0) ──────────────────────────────────────────────────
+  { id:'W-SDWAN-DLL', sev:'warning', cat:'sdwan', thr:3, thOp:'>=',
+    title:'SD-WAN DLL injection / AV interference',
+    desc:'Third-party security software is injecting into SD-WAN processes and blocking return traffic at the kernel level. Matches error-level JSON log entries with "access denied".',
+    rx:'Run BwanDLLInjectionCheck script on the endpoint. Add SD-WAN processes and IPs to AV/EDR exclusions.',
+    pat:'/"level":"error".*access denied/i' },
+  // ── NPA (GTF v1.15.0) ─────────────────────────────────────────────────────
+  { id:'C-NPA-TRANSPORT-FAIL', sev:'critical', cat:'npa', thr:1, thOp:'>=',
+    title:'NPA transport connection failure',
+    desc:'The NPA tunnel transport layer failed — neClientTransportHander.cpp returned len=0. The user cannot reach any private apps.',
+    rx:'Verify firewall allows outbound TCP 443 and UDP 443 to *.npa.goskope.com. Confirm the NPA publisher serving the target app is online in the Netskope admin console.',
+    pat:'/neClientTransportHander\\.cpp.*failed with len\\s*=\\s*0/i' },
+  { id:'I-NPA-GATEWAY-CONNECT', sev:'info', cat:'npa', thr:1, thOp:'>=',
+    title:'NPA gateway connection established',
+    desc:'The NPA client successfully connected to a Netskope gateway and received a client ID. Positive signal — use to establish timeline context alongside failure checks.',
+    rx:'No action required. If this fires alongside C-NPA-TRANSPORT-FAIL or C-NPA-TUNNEL-SSL, it confirms the tunnel connected then broke.',
+    pat:'/setClientId.*Set clientId/i' },
+  { id:'C-NPA-TUNNEL-SSL', sev:'critical', cat:'npa', thr:1, thOp:'>=',
+    title:'SSL/TLS error on NPA tunnel',
+    desc:'An SSL error occurred on the NPA tunnel (sslhelper.cpp). This almost always means a third-party security tool is intercepting and breaking the NPA mTLS handshake.',
+    rx:'Bypass *.npa.goskope.com from any SSL inspection tool. Verify the Netskope root CA is in the system trust store. If a third-party VPN is active, check if it intercepts NPA traffic.',
+    pat:'/sslhelper\\.cpp.*SSL Error \\d+/i' },
+  { id:'W-NPA-DTLS-ERROR', sev:'warning', cat:'npa', thr:1, thOp:'>=',
+    title:'NPA DTLS transport error',
+    desc:'A DTLS error occurred on the NPA tunnel. Unlike SWG which falls back to TLS, NPA has no TCP fallback for UDP apps — RDP, VoIP, and DNS-over-NPA will be impacted.',
+    rx:'Verify UDP 443 is not blocked. Check for NAT devices interfering with DTLS session establishment. Confirm UDP 443 is allowed outbound to *.npa.goskope.com.',
+    pat:'/DTLS.*error|dtls.*fail/i' },
+  { id:'W-NPA-NETCHANGE-DISCONNECT', sev:'warning', cat:'npa', thr:3, thOp:'>=',
+    title:'Repeated NPA disconnects on network change',
+    desc:'The NPA tunnel disconnected 3+ times due to network interface changes. NPA recovery is slower than SWG — each disconnect drops all active private app sessions.',
+    rx:'Check if the user is frequently switching networks (Wi-Fi/Ethernet, docking/undocking). Check for third-party VPN conflicts with NPA re-establishment.',
+    pat:'/L3ClientChannel\\.cpp.*destroy.*Cleaning up l3clientChannel/i' },
+  // ── GSLB (GTF v1.15.0) ────────────────────────────────────────────────────
+  { id:'I-GSLB-V1-FALLBACK', sev:'info', cat:'gslb', thr:1, thOp:'>=',
+    title:'Client using Traffic Management 1.0 — DNS-selected gateway, not GSLB',
+    desc:'The SWG tunnel is using a gateway in "gateway-<tenant>.goskope.com" format — Traffic Management v1.0 (DNS geolocation) rather than GSLB RTT-based PoP selection. PoP quality is significantly lower in v1.0 mode.',
+    rx:'Check if GSLB is enabled for this tenant (min: R99 SWG, R109 NPA). If C-GSLB-FAIL also fires, resolve the GSLB connectivity issue first. If not, contact Netskope to enable NewEdge Traffic Management 2.0.',
+    pat:'/gateway-[^.]+\\.goskope\\.com/i' },
 ];
 
 // Parse a GTF logPattern string ("/pat/flags" or "/p1/flags | /p2/flags") into a testable object.
