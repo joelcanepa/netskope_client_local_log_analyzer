@@ -6770,7 +6770,7 @@ function cfSelectFile(filename) {
   let display = raw;
 
   if (isJson) {
-    try { display = JSON.stringify(JSON.parse(raw.replace(/^﻿/, '')), null, 2); } catch {}
+    try { display = JSON.stringify(JSON.parse(raw.replace(/^﻿/, '').replace(/\0/g, '')), null, 2); } catch {}
   }
 
   const lines = display.split('\n');
