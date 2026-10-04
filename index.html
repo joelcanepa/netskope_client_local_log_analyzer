@@ -839,7 +839,6 @@ body {
   align-items: center;
   padding: 10px 14px;
   cursor: pointer;
-  background: var(--bg3);
   border-bottom: 1px solid var(--border);
   user-select: none;
   gap: 8px;
@@ -847,10 +846,8 @@ body {
 .di-section-hdr:hover { background: #21262d; }
 .di-section-title {
   font-weight: 600;
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: var(--muted);
+  font-size: 13px;
+  color: var(--text);
   flex: 1;
 }
 .di-section-meta {
@@ -897,6 +894,13 @@ body {
 .di-rt-mac { grid-template-columns: 180px 160px 70px 80px; }
 .di-hotfix-list { padding: 10px 14px; display: flex; flex-wrap: wrap; gap: 6px; }
 .di-hotfix-pill { font-size: 11px; color: #e6edf3; background: #21262d; border: 1px solid #30363d; border-radius: 4px; padding: 2px 8px; font-family: monospace; }
+
+/* ── Device Details identity bar ── */
+.dd-id-bar { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 16px; background: var(--bg2); border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.gib-card { background: var(--bg3); border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px; min-width: 90px; flex-shrink: 0; }
+.gib-label { font-size: 9px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 3px; }
+.gib-val { font-size: 13px; font-weight: 700; color: #e6edf3; }
+.gib-sub { font-size: 10px; color: var(--muted); margin-top: 1px; }
 
 /* ── Scrollbar ── */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
@@ -964,7 +968,7 @@ body {
   <div class="tab" data-tab="timeline" data-beta="true">📈 Timeline <span style="font-size:9px;background:#3fb95033;color:#3fb950;border:1px solid #3fb95055;border-radius:3px;padding:1px 4px;vertical-align:middle;font-weight:700">BETA</span></div>
   <div class="tab" data-tab="pcap">🔬 PCAP <span class="tab-badge info" id="tab-pcap-count" style="display:none">0</span></div>
   <div class="tab" data-tab="configfiles">⚙️ Config Files <span class="tab-badge info" id="tab-config-count">0</span></div>
-  <div class="tab" data-tab="sysinfo">🖥️ System Info</div>
+  <div class="tab" data-tab="sysinfo">💻 Device Details</div>
 </div>
 
 <!-- Main -->
@@ -1164,6 +1168,7 @@ body {
   </div>
 
   <div class="tab-panel" id="panel-sysinfo">
+    <div class="dd-id-bar" id="dd-id-bar" style="display:none"></div>
     <div class="sysinfo-panel">
       <div class="si-sidebar" id="si-sidebar"></div>
       <div class="si-content" id="sysinfo-content"></div>
@@ -5072,19 +5077,22 @@ function renderSysInfo() {
   const summaryHtml = buildSummaryPanel();
   if (summaryHtml) panels.summary = { icon: '📊', label: 'Summary', html: summaryHtml };
 
-  // Client panel
-  const nsClientFields = [
-    'NS Client Version','Tenant ID','Tenant Host','Org Key',
-    'Gateway','Gateway POP','Tunnel Status','Tunnel Protocol',
-    'Steering Config','Client Config','Traffic Mode','BWAN URL',
-    'User Email','Pre-Auth User','Auto Update','Fail Close','Last Connected IP',
-    'Tunnel Status Code','NPA Status Code','Client Status Code',
+  // Enrollment panel
+  const enrollFields = ['User Email','Pre-Auth User','Tenant ID','Tenant Host','Org Key','Client Status Code'];
+  const enrollRows = enrollFields.map(k => [k, s[k]]).filter(([,v]) => v);
+  let enrollHtml = '';
+  if (enrollRows.length) enrollHtml += diSection('Identity', s['Tenant Host'] || s['Tenant ID'] || '', diKvGrid(enrollRows), true);
+  if (ds && Object.keys(ds).length) enrollHtml += diSection('Device State', ds['Classification'] || '', diKvGrid(Object.entries(ds)), true);
+  if (enrollHtml) panels.enrollment = { icon: '🔑', label: 'Enrollment', html: enrollHtml };
+
+  // Client Config panel
+  const clientCfgFields = [
+    'NS Client Version','Auto Update','Fail Close','Client Config',
+    'Traffic Mode','Tunnel Protocol','Tunnel Status','Gateway','Gateway POP',
+    'BWAN URL','Steering Config','Tunnel Status Code','NPA Status Code','Last Connected IP',
   ];
-  const nsRows = nsClientFields.map(k => [k, s[k]]).filter(([,v]) => v);
-  let clientHtml = '';
-  if (nsRows.length) clientHtml += diSection('Netskope Client', s['NS Client Version'] || '', diKvGrid(nsRows), true);
-  if (ds && Object.keys(ds).length) clientHtml += diSection('Device State', ds['Classification'] || '', diKvGrid(Object.entries(ds)), true);
-  if (clientHtml) panels.client = { icon: '🛡️', label: 'Netskope Client', html: clientHtml };
+  const clientCfgRows = clientCfgFields.map(k => [k, s[k]]).filter(([,v]) => v);
+  if (clientCfgRows.length) panels.clientconfig = { icon: '⚙️', label: 'Client Config', html: diSection('Client Configuration', s['NS Client Version'] || '', diKvGrid(clientCfgRows), true) };
 
   // EPDLP panel
   if (state.epdlp) {
@@ -5212,16 +5220,52 @@ function renderSysInfo() {
     panels.aidiscovery = { icon: '🤖', label: 'AI Discovery', html: diSection('AI Discovery', `${agentCount} agent${agentCount !== 1 ? 's' : ''} detected`, diKvGrid(aidRows), true), badge: llmCount };
   }
 
+  // ── Order panels ─────────────────────────────────────────────────
+  const orderedPanels = {};
+  ['summary','enrollment','clientconfig','epdlp','steering','devclass','network','apps','bypass','hotfixes','dem','aidiscovery','system'].forEach(k => {
+    if (panels[k]) orderedPanels[k] = panels[k];
+  });
+
+  // ── Populate global identity bar ─────────────────────────────────
+  const uc2 = (state.nsuser?.userConfig) || {};
+  const ibTunnelCode = uc2.tunnelStatus != null ? String(uc2.tunnelStatus) : null;
+  const ibNpaCode    = uc2.npaStatus    != null ? String(uc2.npaStatus)    : null;
+  const TSTATUS = {'0':'Disabled','8':'Disconnected','21':'Disabled','22':'Connected','1':'Connected'};
+  const NSTATUS = {'0':'Active','1':'Connecting','2':'Connected (GW)','3':'Auth Failed','4':'Connected','5':'Connected','6':'Not enrolled'};
+  const ibTunnelLabel = ibTunnelCode != null ? (TSTATUS[ibTunnelCode] || `Code ${ibTunnelCode}`) : '—';
+  const ibNpaLabel    = ibNpaCode    != null ? (NSTATUS[ibNpaCode]    || `Code ${ibNpaCode}`)    : '—';
+  const ibTunnelOk    = ibTunnelLabel === 'Connected';
+  const ibNpaOk       = ibNpaLabel.startsWith('Connected') || ibNpaLabel === 'Active';
+  const ibTunnelColor = ibTunnelCode == null ? '#6e7681' : ibTunnelOk ? '#3fb950' : '#d29922';
+  const ibNpaColor    = ibNpaCode    == null ? '#6e7681' : ibNpaOk    ? '#3fb950' : '#d29922';
+  const steerCfgName  = s['Steering Config'] || (state.steering||{}).steering_config_name;
+  const ibGib = (lbl, val, sub, col) =>
+    `<div class="gib-card"><div class="gib-label">${lbl}</div><div class="gib-val"${col ? ` style="color:${col}"` : ''}>${esc(val||'—')}</div>${sub ? `<div class="gib-sub">${esc(sub)}</div>` : ''}</div>`;
+  const ibEl = document.getElementById('dd-id-bar');
+  if (ibEl) {
+    const tiles = [
+      (s['Hostname']||s['Host Name'])    ? ibGib('HOSTNAME', s['Hostname']||s['Host Name'], s['OS Name']||'') : null,
+      s['NS Client Version']             ? ibGib('CLIENT', s['NS Client Version'], 'Netskope Client') : null,
+      (s['Tenant Host']||s['Tenant ID']) ? ibGib('TENANT', s['Tenant Host']||s['Tenant ID'], s['Tenant ID']||'') : null,
+      ibGib('SWG TUNNEL', ibTunnelLabel, ibTunnelCode ? `code ${ibTunnelCode}` : '', ibTunnelColor),
+      ibGib('NPA STATUS', ibNpaLabel, ibNpaCode ? `code ${ibNpaCode}` : '', ibNpaColor),
+      s['User Email']                    ? ibGib('USER', s['User Email'], s['Pre-Auth User'] ? `pre-auth: ${s['Pre-Auth User']}` : '') : null,
+      steerCfgName                       ? ibGib('STEERING', steerCfgName, '') : null,
+    ].filter(Boolean);
+    ibEl.innerHTML = tiles.join('');
+    ibEl.style.display = tiles.length ? '' : 'none';
+  }
+
   // ── Build sidebar nav ────────────────────────────────────────────
-  const panelKeys = Object.keys(panels);
+  const panelKeys = Object.keys(orderedPanels);
   if (!panelKeys.length) return;
-  const defaultPanel = panels.summary ? 'summary' : panelKeys[0];
-  const activePanel = state._siActivePanel && panels[state._siActivePanel] ? state._siActivePanel : defaultPanel;
+  const defaultPanel = orderedPanels.summary ? 'summary' : panelKeys[0];
+  const activePanel = state._siActivePanel && orderedPanels[state._siActivePanel] ? state._siActivePanel : defaultPanel;
   state._siActivePanel = activePanel;
 
   const sidebar = document.getElementById('si-sidebar');
   sidebar.innerHTML = panelKeys.map(key => {
-    const p = panels[key];
+    const p = orderedPanels[key];
     const badgeHtml = p.badge > 0
       ? `<span class="si-side-badge">${p.badge}</span>`
       : '';
@@ -5231,7 +5275,7 @@ function renderSysInfo() {
   // ── Build content panels ─────────────────────────────────────────
   const content = document.getElementById('sysinfo-content');
   content.innerHTML = panelKeys.map(key =>
-    `<div class="si-panel${key === activePanel ? ' active' : ''}" id="si-panel-${key}">${panels[key].html}</div>`
+    `<div class="si-panel${key === activePanel ? ' active' : ''}" id="si-panel-${key}">${orderedPanels[key].html}</div>`
   ).join('');
 }
 
