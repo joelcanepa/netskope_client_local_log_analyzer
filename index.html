@@ -1219,7 +1219,7 @@ body {
 
 <script>
 // ─── Version ─────────────────────────────────────────────────────────────────
-const TOOL_VERSION = '1.16.9';
+const TOOL_VERSION = '1.17.0';
 
 // ─── State ────────────────────────────────────────────────────────────────────
 const state = {
@@ -4820,8 +4820,6 @@ function renderFindingCard(d) {
   const cat         = CATEGORIES[d.category] || { label: d.category, color: '#8b949e' };
   const dismissed   = state.dismissedIssues.has(d.id);
   const hasExamples = d.examples && d.examples.length > 0;
-  const isHigh      = d.severity === 'high';
-
   const gtfBadge   = d.source === 'gtf'
     ? `<span style="font-size:9px;font-weight:700;padding:2px 6px;border-radius:4px;background:#7c3aed22;color:#a371f7;border:1px solid #7c3aed55;letter-spacing:.5px">GTF</span>`
     : '';
@@ -4852,7 +4850,7 @@ function renderFindingCard(d) {
         ${gtfBadge}${countBadge}
       </div>
       <div class="fc-header-actions">
-        ${!isHigh ? `<button class="fc-expand-btn" id="fc-exp-btn-${d.id}" onclick="toggleFindingExpand('${d.id}',this)">▾ More</button>` : ''}
+        <button class="fc-expand-btn open" id="fc-exp-btn-${d.id}" onclick="toggleFindingExpand('${d.id}',this)">▴ Less</button>
         <button class="fc-dismiss-btn${dismissed ? ' reviewed' : ''}"
           onclick="dismissFinding('${d.id}')" title="${dismissed ? 'Restore' : 'Mark reviewed'}">
           ${dismissed ? '↺ Restore' : '✓ Reviewed'}
@@ -4866,7 +4864,7 @@ function renderFindingCard(d) {
     </div>
     ${d.detail ? `<div class="fc-metric">📊 ${esc(d.detail)}</div>` : ''}
 
-    <div class="fc-body" id="fc-body-${d.id}" style="${isHigh ? '' : 'display:none'}">
+    <div class="fc-body" id="fc-body-${d.id}">
       ${bodyHtml}
     </div>
   </div>`;
