@@ -1171,7 +1171,7 @@ body {
 
 <script>
 // ─── Version ─────────────────────────────────────────────────────────────────
-const TOOL_VERSION = '1.15.12';
+const TOOL_VERSION = '1.16.0';
 
 // ─── State ────────────────────────────────────────────────────────────────────
 const state = {
@@ -6545,6 +6545,7 @@ const TL_CAT = {
   client:  { label:'Client',  color:'#f85149' },
   bwan:    { label:'SD-WAN',  color:'#bc8cff' },
   config:  { label:'Config',  color:'#8b949e' },
+  ai:      { label:'AI',      color:'#06b6d4' },
 };
 const TL_SEV = {
   good: '#3fb950', bad: '#f85149', warn: '#d29922', info: '#58a6ff', muted: '#6e7681'
@@ -6611,6 +6612,24 @@ const TL_PATTERNS = [
     test: r => /config.*downloaded|Policy is up to date|tenant.*config.*receiv|policy.*download.*success/i.test(r.msg) },
   { id:'steering-refresh',cat:'config',  sev:'info', label:'Steering refresh',
     test: r => /steering.*config.*appli|steering.*config.*update|new.*steering.*config/i.test(r.msg) },
+  // Device posture / classification (surfaces in Client lane)
+  { id:'posture-pass',    cat:'client',  sev:'good', label:'Posture passed',
+    test: r => /device.class(?:ification)?.*(?:pass|success|valid)\b|posture.*(?:pass|success)\b|device.*cert.*valid\b/i.test(r.msg) },
+  { id:'posture-fail',    cat:'client',  sev:'bad',  label:'Posture failed',
+    test: r => /device.class(?:ification)?.*(?:fail|invalid)\b|posture.*fail\b|device.*cert.*(?:invalid|expir|not.found)|certificate.*posture.*fail/i.test(r.msg) },
+  { id:'posture-check',   cat:'client',  sev:'muted',label:'Posture check',
+    test: r => /running.*device.*class|device.*posture.*check|evaluat.*posture|posture.*evaluat/i.test(r.msg) },
+  // AI Discovery
+  { id:'ai-scan',         cat:'ai',      sev:'info', label:'AI scan',
+    test: r => /GEF.*scan|ai.?discovery.*scan|process.*discovery.*complet|GEF.*complet/i.test(r.msg),
+    detail: r => { const m = r.msg.match(/(\d+)\s*(?:app|process)/i); return m ? m[1]+' found' : null; } },
+  { id:'ai-app-found',    cat:'ai',      sev:'info', label:'App detected',
+    test: r => /GEF.*new.*app|ai.*new.*app|generative.*ai.*detect|new.*GenAI/i.test(r.msg),
+    detail: r => { const m = r.msg.match(/app(?:lication)?[:\s"']+([^\s"',\n]{3,30})/i); return m ? m[1] : null; } },
+  { id:'ai-sig-fail',     cat:'ai',      sev:'warn', label:'Sig update failed',
+    test: r => /AI.*signature.*(?:502|error|fail)|GEF.*signature.*(?:download.*fail|error)/i.test(r.msg) },
+  { id:'ai-codepage',     cat:'ai',      sev:'warn', label:'Codepage error',
+    test: r => /GEF process path ANSI|process_path[^"]*\?\?/i.test(r.msg) },
 ];
 
 function tlBuildEvents(cat, q) {
@@ -6622,7 +6641,7 @@ function tlBuildEvents(cat, q) {
       for (const pat of TL_PATTERNS) {
         if (cat !== 'all' && pat.cat !== cat) continue;
         if (!pat.test(r)) continue;
-        const key = `${pat.id}:${Math.floor(ms / 30000)}`; // dedup per 30s window
+        const key = `${pat.id}:${Math.floor(ms / 30000)}`;
         if (!seen.has(key)) {
           seen.set(key, { ms, ts: r.ts, cat: pat.cat, sev: pat.sev,
             label: pat.label, detail: pat.detail ? pat.detail(r) : null });
@@ -6630,6 +6649,29 @@ function tlBuildEvents(cat, q) {
       }
     }
   }
+
+  // Synthetic sleep/wake events — inferred from gaps > 10 min across all log timestamps
+  if (cat === 'all' || cat === 'client') {
+    const SLEEP_GAP = 10 * 60 * 1000;
+    const allTs = [];
+    for (const rows of Object.values(state.parsedLogs || {})) {
+      for (const r of rows) { const ms = _tsToMs(r.ts); if (ms) allTs.push(ms); }
+    }
+    allTs.sort((a, b) => a - b);
+    // Deduplicate to 5 s buckets so dense logs don't dominate the sort
+    const tsUniq = allTs.filter((t, i) => i === 0 || t - allTs[i - 1] > 5000);
+    for (let i = 1; i < tsUniq.length; i++) {
+      const gap = tsUniq[i] - tsUniq[i - 1];
+      if (gap < SLEEP_GAP) continue;
+      const h = Math.floor(gap / 3600000), m = Math.floor((gap % 3600000) / 60000);
+      const durStr = h > 0 ? `${h}h ${m}m` : `${Math.round(gap / 60000)}m`;
+      const sk = `sleep:${Math.floor(tsUniq[i-1] / 30000)}`;
+      const wk = `wake:${Math.floor(tsUniq[i] / 30000)}`;
+      if (!seen.has(sk)) seen.set(sk, { ms: tsUniq[i-1] + 500, ts: null, cat: 'client', sev: 'muted', label: 'Device asleep', detail: durStr });
+      if (!seen.has(wk)) seen.set(wk,  { ms: tsUniq[i]   - 500, ts: null, cat: 'client', sev: 'info',  label: 'Device woke',   detail: null });
+    }
+  }
+
   let events = [...seen.values()].sort((a, b) => a.ms - b.ms);
   if (q) {
     const ql = q.toLowerCase();
