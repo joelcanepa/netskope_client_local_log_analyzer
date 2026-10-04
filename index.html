@@ -5135,7 +5135,7 @@ function renderFindingCard(d) {
   const cat         = CATEGORIES[d.category] || { label: d.category, color: '#8b949e' };
   const dismissed   = state.dismissedIssues.has(d.id);
   const hasExamples = d.examples && d.examples.length > 0;
-  const exOpen      = d.severity === 'high' && hasExamples;
+  const exOpen      = false;
   const exCnt       = hasExamples ? d.examples.length : 0;
   const logSearchTerm = hasExamples ? (() => {
     const raw = typeof d.examples[0] === 'object' ? d.examples[0].raw : d.examples[0];
