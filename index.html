@@ -1171,7 +1171,7 @@ body {
 
 <script>
 // ─── Version ─────────────────────────────────────────────────────────────────
-const TOOL_VERSION = '1.15.5';
+const TOOL_VERSION = '1.15.6';
 
 // ─── State ────────────────────────────────────────────────────────────────────
 const state = {
@@ -6714,7 +6714,8 @@ function renderTimeline() {
   const SEV_FILL = { good:'#3fb950', bad:'#f85149', warn:'#d29922', info:'#58a6ff', muted:'#6e7681' };
   const SEV_ICON = { good:'✅', bad:'🔴', warn:'⚠️', info:'🔵', muted:'⚪' };
 
-  let lanesSvg = '';
+  let lanesFixedSvg = ''; // backgrounds, separators, labels — NOT clipped
+  let lanesClipSvg  = ''; // baselines, chips — clipped to chart area
 
   cats.forEach((cat, li) => {
     const cy = MT + li * LANE_H + LANE_H / 2;
@@ -6723,31 +6724,28 @@ function renderTimeline() {
     const dimmed = _tlCat !== 'all' && _tlCat !== cat;
     const op = dimmed ? 0.2 : 1;
 
-    // Lane background
-    lanesSvg += `<rect x="0" y="${MT + li*LANE_H}" width="${W}" height="${LANE_H}" fill="${meta.color}${li%2===0?'0b':'06'}"/>`;
-    // Separator
-    lanesSvg += `<line x1="0" y1="${MT+(li+1)*LANE_H}" x2="${W}" y2="${MT+(li+1)*LANE_H}" stroke="var(--border)" stroke-width="0.5"/>`;
+    // Lane background + separator (full width, not clipped)
+    lanesFixedSvg += `<rect x="0" y="${MT+li*LANE_H}" width="${W}" height="${LANE_H}" fill="${meta.color}${li%2===0?'0b':'06'}"/>`;
+    lanesFixedSvg += `<line x1="0" y1="${MT+(li+1)*LANE_H}" x2="${W}" y2="${MT+(li+1)*LANE_H}" stroke="var(--border)" stroke-width="0.5"/>`;
 
-    // Label + event count sub-label
+    // Lane label + count (left column, not clipped)
     const nc = _tlCat === cat ? 'all' : cat;
-    lanesSvg += `<text x="${LW-10}" y="${cy - 5}" font-size="12" font-weight="700" fill="${dimmed?'var(--muted)':meta.color}" text-anchor="end" style="cursor:pointer;user-select:none" onclick="tlSetCat('${nc}')">${meta.label}</text>`;
-    lanesSvg += `<text x="${LW-10}" y="${cy + 9}" font-size="9" fill="${dimmed?'var(--muted)':meta.color}" text-anchor="end" opacity="${dimmed?0.3:0.55}">${evs.length ? evs.length+' event'+(evs.length>1?'s':'') : '—'}</text>`;
+    lanesFixedSvg += `<text x="${LW-10}" y="${cy-5}" font-size="12" font-weight="700" fill="${dimmed?'var(--muted)':meta.color}" text-anchor="end" style="cursor:pointer;user-select:none" onclick="tlSetCat('${nc}')">${meta.label}</text>`;
+    lanesFixedSvg += `<text x="${LW-10}" y="${cy+9}" font-size="9" fill="${dimmed?'var(--muted)':meta.color}" text-anchor="end" opacity="${dimmed?0.3:0.55}">${evs.length ? evs.length+' event'+(evs.length>1?'s':'') : '—'}</text>`;
 
-    // Baseline through lane
-    lanesSvg += `<line x1="${LW}" y1="${cy}" x2="${W-MR}" y2="${cy}" stroke="${meta.color}" stroke-width="0.8" opacity="${dimmed?0.08:0.18}"/>`;
+    // Baseline + empty hint + chips all go inside the clip group
+    lanesClipSvg += `<line x1="${LW}" y1="${cy}" x2="${W-MR}" y2="${cy}" stroke="${meta.color}" stroke-width="0.8" opacity="${dimmed?0.08:0.18}"/>`;
 
-    // Empty lane hint
     if (!evs.length && !dimmed)
-      lanesSvg += `<text x="${LW+14}" y="${cy+4}" font-size="10" fill="var(--muted)" opacity="0.3" font-style="italic">no events detected</text>`;
+      lanesClipSvg += `<text x="${LW+14}" y="${cy+4}" font-size="10" fill="var(--muted)" opacity="0.3" font-style="italic">no events detected</text>`;
 
-    // Pre-compute chip widths and detect overlaps
+    // Chip layout
     const chips = evs.map(({ ev, i }) => {
       const lbl = ev.label.length > MAX_LBL ? ev.label.slice(0, MAX_LBL-1)+'…' : ev.label;
       const cW = Math.min(190, lbl.length * CHAR_W + ICON_W + CH_PAD * 2);
       return { ev, i, lbl, cW, x: tsToX(ev.ms) };
     });
 
-    // Overlap pass — if chip left edge would collide with previous chip's right, fall back to dot
     let prevRight = -Infinity;
     chips.forEach(c => {
       const left = c.x - c.cW / 2;
@@ -6759,15 +6757,13 @@ function renderTimeline() {
       const fill = SEV_FILL[c.ev.sev] || '#8b949e';
       const xf = c.x.toFixed(1);
       if (c.dot) {
-        // Compact dot fallback for crowded events
-        lanesSvg += `<circle cx="${xf}" cy="${cy}" r="5" fill="${fill}" stroke="var(--bg)" stroke-width="1.5" opacity="${op}" style="cursor:pointer" onmouseover="tlTipShow(event,${c.i})" onmouseout="tlTipHide()" onclick="tlTipPin(event,${c.i})"/>`;
+        lanesClipSvg += `<circle cx="${xf}" cy="${cy}" r="5" fill="${fill}" stroke="var(--bg)" stroke-width="1.5" opacity="${op}" style="cursor:pointer" onmouseover="tlTipShow(event,${c.i})" onmouseout="tlTipHide()" onclick="tlTipPin(event,${c.i})"/>`;
       } else {
-        // Full labeled chip
         const rx = (c.x - c.cW/2).toFixed(1);
         const ry = (cy - CHIP_H/2).toFixed(1);
         const icon = SEV_ICON[c.ev.sev] || '⚪';
         const tx = (c.x - c.cW/2 + CH_PAD).toFixed(1);
-        lanesSvg += `<g style="cursor:pointer" onmouseover="tlTipShow(event,${c.i})" onmouseout="tlTipHide()" onclick="tlTipPin(event,${c.i})">
+        lanesClipSvg += `<g style="cursor:pointer" onmouseover="tlTipShow(event,${c.i})" onmouseout="tlTipHide()" onclick="tlTipPin(event,${c.i})">
           <rect x="${rx}" y="${ry}" width="${c.cW.toFixed(1)}" height="${CHIP_H}" rx="${CHIP_R}" fill="${fill}1e" stroke="${fill}" stroke-width="1.3" opacity="${op}"/>
           <text x="${tx}" y="${(cy+4).toFixed(1)}" font-size="11" fill="${dimmed?'var(--muted)':fill}" opacity="${op}">${icon} ${c.lbl}</text>
         </g>`;
@@ -6835,7 +6831,8 @@ function renderTimeline() {
         onmousemove="tlBrushMove(event)" onmouseup="tlBrushUp(event)" onmouseleave="tlBrushCancel()">
         ${defsSvg}
         ${gridSvg}
-        <g clip-path="url(#tl-clip)">${lanesSvg}</g>
+        ${lanesFixedSvg}
+        <g clip-path="url(#tl-clip)">${lanesClipSvg}</g>
         ${axisSvg}${divSvg}${brushSvg}
       </svg>
     </div>
@@ -6965,14 +6962,16 @@ function _tlRenderTip(cx, cy, idx) {
     <div style="display:flex;flex-direction:column;gap:1px">${rows}</div>
     ${pinHint}`;
 
+  // Show off-screen first so scrollHeight is measurable, then reposition
+  tip.style.left = '-9999px';
+  tip.style.top  = '-9999px';
   tip.style.display = 'block';
-  // Position: prefer right of cursor, flip left if no room; prefer below, flip up if no room
-  const tipW = 340;
-  const lx = cx + 18 + tipW > window.innerWidth ? cx - tipW - 8 : cx + 18;
+  const tipW = tip.offsetWidth  || 340;
   const tipH = tip.scrollHeight || 160;
-  const ty = cy - 10 + tipH > window.innerHeight ? cy - tipH - 4 : cy - 10;
-  tip.style.left = lx + 'px';
-  tip.style.top  = ty + 'px';
+  const lx = cx + 18 + tipW > window.innerWidth  ? cx - tipW - 10 : cx + 18;
+  const ty = cy - 10 + tipH > window.innerHeight ? cy - tipH - 6  : cy - 10;
+  tip.style.left = Math.max(8, lx) + 'px';
+  tip.style.top  = Math.max(8, ty) + 'px';
 }
 document.addEventListener('click', () => { if (_tlPinned >= 0) { _tlPinned = -1; tlTipHide(); } });
 
