@@ -1242,7 +1242,7 @@ body {
 
 <script>
 // ─── Version ─────────────────────────────────────────────────────────────────
-const TOOL_VERSION = '1.21.1';
+const TOOL_VERSION = '1.22.0';
 
 // ─── State ────────────────────────────────────────────────────────────────────
 const state = {
@@ -10744,6 +10744,29 @@ function renderAiDiscovery() {
   };
 
   const ts2str  = ts => ts ? new Date(ts * 1000).toLocaleString() : '—';
+
+  const riskBadge = lvl => {
+    const c = lvl === 'HIGH' ? '#f85149' : lvl === 'MEDIUM' ? '#e3b341' : '#8b949e';
+    return `<span style="font-size:9px;font-weight:700;padding:2px 7px;border-radius:99px;background:${c}22;color:${c};border:1px solid ${c}44;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap;flex-shrink:0">${lvl} RISK</span>`;
+  };
+  const agentRisk = agent => {
+    const sysId    = String(agent.system_id || '');
+    const hasFsMcp = (agent.mcp_servers || []).some(s => /server-filesystem/i.test(s.resolved_package || s.command || ''));
+    if (sysId === '20000001') return 'HIGH';
+    if (hasFsMcp) return 'HIGH';
+    if (['10000001','10000002','10000004'].includes(sysId)) return 'MEDIUM';
+    return 'LOW';
+  };
+  const flagPath = path => {
+    if (!path) return '<span style="color:var(--muted)">—</span>';
+    const safe = esc(path);
+    if (path.includes('??')) {
+      return `<span style="color:#e6edf3;font-family:monospace;word-break:break-all">${safe}</span>`
+           + ` <span title="Non-ASCII characters lost — Windows ANSI codepage conversion. Upgrade client to R142+." `
+           + `style="font-size:9px;font-weight:700;background:rgba(240,136,62,.15);color:#f0883e;border:1px solid rgba(240,136,62,.3);border-radius:3px;padding:1px 5px;cursor:help;white-space:nowrap">⚠️ PATH CORRUPTED</span>`;
+    }
+    return `<span style="color:var(--muted);font-family:monospace;word-break:break-all">${safe}</span>`;
+  };
   const totalExtCount       = browserExts.reduce((s, b) => s + (b.profiles||[]).reduce((ps, p) => ps + (p.extensions||[]).length, 0), 0);
   const totalEditorExtCount = editorExts.reduce((s, e) => s + (e.extensions||[]).length, 0);
 
@@ -10809,10 +10832,11 @@ function renderAiDiscovery() {
       html += `<div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--bg3);border-bottom:1px solid var(--border)">
         <span style="font-size:16px">${meta.icon}</span>
         <div style="flex:1;min-width:0">
-          <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
             <span style="font-size:12px;font-weight:700;color:${meta.color}">${esc(meta.label)}</span>
             <span style="font-size:11px;color:var(--muted)">${esc(meta.desc)}</span>
             <span style="font-family:monospace;font-size:10px;color:var(--muted);background:var(--bg);border:1px solid var(--border);border-radius:3px;padding:0 5px">${esc(sysId)}</span>
+            ${riskBadge(agentRisk(agent))}
           </div>
         </div>
         <span style="font-size:10px;color:var(--muted);flex-shrink:0">${esc(scanTime)}</span>
@@ -10824,7 +10848,7 @@ function renderAiDiscovery() {
           <span style="font-size:11px;color:var(--muted)">Process</span>
           <span style="font-size:12px;font-weight:600;color:var(--text)">${esc(pi.pname || '—')}</span>
           ${pi.ppname ? `<span style="font-size:11px;color:var(--muted)">Parent: <span style="color:var(--text);font-family:monospace">${esc(pi.ppname)}</span></span>` : ''}
-          ${pi.bin_path ? `<span style="font-size:11px;color:var(--muted);font-family:monospace;word-break:break-all">${esc(pi.bin_path)}</span>` : ''}
+          ${pi.bin_path ? flagPath(pi.bin_path) : ''}
         </div>`;
       }
 
@@ -10845,7 +10869,7 @@ function renderAiDiscovery() {
           html += `<div style="display:grid;grid-template-columns:${cols};min-width:420px;border-top:1px solid var(--border)${isLast ? ';border-radius:0 0 0 0' : ''}">
             <span style="padding:7px 10px;font-size:12px;font-weight:600;color:var(--text);border-right:1px solid var(--border)">${esc(srv.name || '—')}</span>
             <span style="padding:7px 10px;font-size:11px;color:var(--muted);font-family:monospace;border-right:1px solid var(--border);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${pkg}">${pkg}</span>
-            <span style="padding:7px 10px;font-size:11px;${isFsSrv && fsArgs.length ? 'color:var(--text)' : 'color:var(--muted)'};font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(pathVal)}">${esc(pathVal)}</span>
+            <span style="padding:7px 10px;font-size:11px;overflow:hidden">${isFsSrv && fsArgs.length ? flagPath(pathVal) : `<span style="color:var(--muted)">—</span>`}</span>
           </div>`;
         });
         html += `</div>`;
@@ -10921,11 +10945,12 @@ function renderAiDiscovery() {
       html += `<div style="background:var(--bg2);border:1px solid var(--border);border-left:3px solid #3fb950;border-radius:0 6px 6px 0;margin-bottom:10px;overflow:hidden">`;
 
       // Server header
-      html += `<div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--bg3);border-bottom:1px solid var(--border)">
+      html += `<div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--bg3);border-bottom:1px solid var(--border);flex-wrap:wrap">
         <span style="width:8px;height:8px;border-radius:50%;background:#3fb950;flex-shrink:0"></span>
         <span style="font-size:13px;font-weight:700;color:var(--text)">${esc(pi.pname || 'LLM Server')}</span>
         <span style="font-size:11px;color:var(--muted);font-family:monospace">${esc(endpoint)}</span>
-        ${pi.bin_path ? `<span style="font-size:10px;color:var(--muted);font-family:monospace;margin-left:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(pi.bin_path)}">${esc(pi.bin_path)}</span>` : ''}
+        ${riskBadge('HIGH')}
+        ${pi.bin_path ? `<span style="font-size:11px;margin-left:auto;overflow:hidden">${flagPath(pi.bin_path)}</span>` : ''}
       </div>`;
 
       // Models table
