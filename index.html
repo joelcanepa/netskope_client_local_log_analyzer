@@ -1171,7 +1171,7 @@ body {
 
 <script>
 // ─── Version ─────────────────────────────────────────────────────────────────
-const TOOL_VERSION = '1.15.3';
+const TOOL_VERSION = '1.15.4';
 
 // ─── State ────────────────────────────────────────────────────────────────────
 const state = {
@@ -6694,9 +6694,9 @@ function renderTimeline() {
   const tickMin = spanMin <= 5 ? 0.5 : spanMin <= 30 ? 2 : spanMin <= 120 ? 10
     : spanMin <= 480 ? 30 : spanMin <= 1440 ? 60 : 240;
   const tickMs = tickMin * 60000;
-  const firstTick = Math.ceil(minMs / tickMs) * tickMs;
+  const firstTick = Math.ceil(vMin / tickMs) * tickMs;
   const ticks = [];
-  for (let t = firstTick; t <= maxMs; t += tickMs) ticks.push(t);
+  for (let t = firstTick; t <= vMax; t += tickMs) ticks.push(t);
   const fmtTick = ms => {
     const d = new Date(ms);
     const h = String(d.getUTCHours()).padStart(2,'0');
