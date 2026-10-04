@@ -463,15 +463,15 @@ body {
   flex: 1;
 }
 .findings-grid {
-  columns: 2;
-  column-gap: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 .finding-divider {
-  column-span: all;
   display: flex;
   align-items: center;
   gap: 10px;
-  margin: 20px 0 10px;
+  margin: 18px 0 6px;
   padding-bottom: 6px;
   border-bottom: 1px solid var(--border);
 }
@@ -484,76 +484,91 @@ body {
 .finding-card {
   background: var(--bg2);
   border: 1px solid var(--border);
-  border-left: 3px solid var(--border);
-  border-radius: 8px;
-  padding: 14px 16px;
-  margin-bottom: 14px;
-  break-inside: avoid;
-  transition: opacity 0.2s;
+  border-left: 5px solid var(--border);
+  border-radius: 10px;
+  padding: 16px 20px;
+  transition: opacity 0.2s, box-shadow 0.15s;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.08);
 }
-.finding-card.severity-high   { border-left-color: var(--error); }
-.finding-card.severity-medium { border-left-color: var(--warning); }
-.finding-card.severity-low    { border-left-color: var(--debug); }
-.finding-card.severity-info   { border-left-color: var(--primary); }
-.finding-card.reviewed        { opacity: 0.38; }
+.finding-card:hover { box-shadow: 0 3px 10px rgba(0,0,0,0.15); }
+.finding-card.severity-high    { border-left-color: var(--error);   background: linear-gradient(100deg, rgba(248,81,73,0.05) 0%, var(--bg2) 55%); }
+.finding-card.severity-medium  { border-left-color: var(--warning); background: linear-gradient(100deg, rgba(227,179,65,0.04) 0%, var(--bg2) 55%); }
+.finding-card.severity-warning { border-left-color: #e8914e; }
+.finding-card.severity-low     { border-left-color: var(--debug); }
+.finding-card.severity-info    { border-left-color: var(--primary); }
+.finding-card.reviewed         { opacity: 0.38; }
 
-.fc-meta { display: flex; align-items: center; gap: 6px; margin-bottom: 7px; flex-wrap: wrap; }
-.fc-icon { font-size: 15px; }
-.fc-title { font-size: 13px; font-weight: 700; color: var(--text); margin-bottom: 4px; line-height: 1.35; }
-.fc-count { font-size: 10px; color: var(--muted); margin-bottom: 4px; }
-.fc-detail {
-  font-family: monospace; font-size: 11px; color: var(--primary);
-  background: var(--bg3); border-radius: 4px; padding: 4px 8px;
-  margin: 6px 0; border: 1px solid var(--border);
-}
-.fc-desc { font-size: 12px; color: var(--muted); line-height: 1.55; margin: 8px 0; }
-.fc-rec {
-  font-size: 12px; color: #3fb950; line-height: 1.55;
-  border-left: 2px solid #3fb95044; padding-left: 8px; margin: 8px 0;
-}
-.fc-footer {
+/* Card header row */
+.fc-header {
   display: flex; align-items: center; justify-content: space-between;
-  margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--border);
-  gap: 8px;
+  gap: 8px; margin-bottom: 10px;
 }
-.fc-btn {
-  font-size: 10px; padding: 3px 9px; border-radius: 4px; cursor: pointer;
+.fc-header-badges { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; flex: 1; }
+.fc-header-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+
+/* Severity pill badge */
+.fc-sev-badge {
+  font-size: 10px; font-weight: 700; padding: 2px 9px;
+  border-radius: 99px; letter-spacing: 0.07em; text-transform: uppercase;
+}
+.fc-sev-badge.sev-high    { background: rgba(248,81,73,0.18);  color: var(--error); }
+.fc-sev-badge.sev-medium  { background: rgba(227,179,65,0.18); color: var(--warning); }
+.fc-sev-badge.sev-warning { background: rgba(232,145,78,0.18); color: #e8914e; }
+.fc-sev-badge.sev-low     { background: rgba(139,148,158,0.18);color: var(--debug); }
+.fc-sev-badge.sev-info    { background: rgba(47,129,247,0.18); color: var(--primary); }
+
+/* Title row */
+.fc-title-row { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 6px; }
+.fc-icon  { font-size: 16px; flex-shrink: 0; line-height: 1.4; }
+.fc-title { font-size: 15px; font-weight: 700; color: var(--text); line-height: 1.35; }
+
+/* Metric line — always visible */
+.fc-metric {
+  display: inline-block; max-width: 100%;
+  font-family: var(--font-mono, monospace); font-size: 11.5px; color: var(--primary);
+  background: var(--bg3); border-radius: 5px; padding: 4px 10px;
+  margin: 4px 0 0; border: 1px solid var(--border);
+}
+
+/* Expandable body */
+.fc-body { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+.fc-desc { font-size: 13px; color: var(--muted); line-height: 1.6; margin-bottom: 10px; }
+.fc-rec {
+  font-size: 12.5px; color: #3fb950; line-height: 1.6;
+  border-left: 2px solid #3fb95055; padding-left: 10px; margin-bottom: 10px;
+}
+
+/* Log lines button */
+.fc-log-btn {
+  font-size: 11px; padding: 4px 10px; border-radius: 5px; cursor: pointer;
+  background: var(--bg3); color: var(--muted); border: 1px solid var(--border);
+  display: inline-flex; align-items: center; gap: 4px;
+}
+.fc-log-btn:hover { color: var(--text); }
+.fc-examples {
+  margin-top: 8px; border-top: 1px solid var(--border);
+  max-height: 220px; overflow-y: auto; border-radius: 0 0 6px 6px;
+}
+
+/* Expand / dismiss action buttons */
+.fc-expand-btn {
+  font-size: 11px; padding: 3px 9px; border-radius: 5px; cursor: pointer;
+  background: var(--bg3); color: var(--muted); border: 1px solid var(--border);
+  transition: color 0.12s;
+}
+.fc-expand-btn:hover { color: var(--text); }
+.fc-expand-btn.open  { color: var(--primary); border-color: rgba(88,166,255,0.35); }
+.fc-dismiss-btn {
+  font-size: 11px; padding: 3px 9px; border-radius: 5px; cursor: pointer;
   background: var(--bg3); color: var(--muted); border: 1px solid var(--border);
 }
-.fc-btn:hover { color: var(--text); }
-.fc-btn.reviewed { color: #3fb950; border-color: #3fb95044; }
-.fc-btn.details-open { color: var(--primary); border-color: #58a6ff44; }
-.fc-examples {
-  margin-top: 10px; border-top: 1px solid var(--border);
-  max-height: 200px; overflow-y: auto;
-  border-radius: 0 0 6px 6px;
-}
+.fc-dismiss-btn:hover { color: var(--text); }
+.fc-dismiss-btn.reviewed { color: #3fb950; border-color: rgba(63,185,80,0.35); }
 
-/* ── Compact card layout ── */
-.finding-card { border-left-width: 4px; padding: 10px 12px; }
-.fc-compact-header { display: flex; align-items: flex-start; gap: 10px; }
-.fc-sev-dot {
-  width: 10px; height: 10px; border-radius: 50%;
-  flex-shrink: 0; margin-top: 5px;
-}
-.sev-dot-high   { background: var(--error);   box-shadow: 0 0 7px rgba(248,81,73,0.55); }
-.sev-dot-medium { background: var(--warning);  box-shadow: 0 0 7px rgba(227,179,65,0.45); }
-.sev-dot-low    { background: var(--debug); }
-.sev-dot-info   { background: var(--primary);  box-shadow: 0 0 5px rgba(47,129,247,0.35); }
-.fc-compact-body { flex: 1; min-width: 0; }
-.fc-compact-title { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.fc-compact-title .fc-icon  { font-size: 14px; flex-shrink: 0; }
-.fc-compact-title .fc-title { font-size: 13px; font-weight: 700; margin: 0; }
-.fc-compact-sub {
-  font-size: 11px; color: var(--muted); margin-top: 3px;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.fc-compact-actions { display: flex; gap: 4px; flex-shrink: 0; align-items: center; }
-.fc-details { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
-/* Re-export severity badge styles (shared with old issue-card) */
-.sev-high   { background: rgba(248,81,73,0.15); color: var(--error); }
+/* Severity badge styles (shared) */
+.sev-high   { background: rgba(248,81,73,0.15);  color: var(--error); }
 .sev-medium { background: rgba(227,179,65,0.15); color: var(--warning); }
-.sev-low    { background: rgba(139,148,158,0.15); color: var(--debug); }
+.sev-low    { background: rgba(139,148,158,0.15);color: var(--debug); }
 .sev-info   { background: rgba(47,129,247,0.15); color: var(--primary); }
 
 /* ── System Info panel ── */
@@ -1171,7 +1186,7 @@ body {
 
 <script>
 // ─── Version ─────────────────────────────────────────────────────────────────
-const TOOL_VERSION = '1.16.1';
+const TOOL_VERSION = '1.16.2';
 
 // ─── State ────────────────────────────────────────────────────────────────────
 const state = {
@@ -4771,70 +4786,68 @@ function renderRecommend(text) {
 }
 
 function renderFindingCard(d) {
-  const cat       = CATEGORIES[d.category] || { label: d.category, color: '#8b949e' };
-  const dismissed = state.dismissedIssues.has(d.id);
+  const cat         = CATEGORIES[d.category] || { label: d.category, color: '#8b949e' };
+  const dismissed   = state.dismissedIssues.has(d.id);
   const hasExamples = d.examples && d.examples.length > 0;
-  const sevLabel  = d.severity.toUpperCase();
-  const sevColor  = d.severity === 'high' ? 'var(--error)' : d.severity === 'medium' ? 'var(--warning)' : d.severity === 'info' ? 'var(--primary)' : 'var(--debug)';
+  const isHigh      = d.severity === 'high';
 
-  // Compact sub-line: detail if present, else first sentence of description
-  const subLine = d.detail
-    ? `📊 ${d.detail}`
-    : d.desc ? d.desc.replace(/\s+/g, ' ').slice(0, 100) + (d.desc.length > 100 ? '…' : '') : '';
+  const gtfBadge   = d.source === 'gtf'
+    ? `<span style="font-size:9px;font-weight:700;padding:2px 6px;border-radius:4px;background:#7c3aed22;color:#a371f7;border:1px solid #7c3aed55;letter-spacing:.5px">GTF</span>`
+    : '';
+  const countBadge = d.count > 1
+    ? `<span style="font-size:10px;color:var(--muted);background:var(--bg3);border:1px solid var(--border);padding:1px 7px;border-radius:99px">${d.count.toLocaleString()}×</span>`
+    : '';
+
+  const bodyHtml = `
+    ${d.desc     ? `<div class="fc-desc">${esc(d.desc)}</div>` : ''}
+    ${d.recommend ? `<div class="fc-rec">💡 ${renderRecommend(d.recommend)}</div>` : ''}
+    ${hasExamples ? `
+      <button class="fc-log-btn" onclick="toggleFindingExamples('${d.id}',this)">
+        ▾ ${d.examples.length} log line${d.examples.length > 1 ? 's' : ''}
+      </button>
+      <div class="fc-examples" id="fc-ex-${d.id}" style="display:none">
+        ${d.examples.map(renderStyledLogLine).join('')}
+      </div>` : ''}`;
 
   return `<div class="finding-card severity-${d.severity}${dismissed ? ' reviewed' : ''}"
     id="fc-${d.id}" data-id="${d.id}"
     data-cat="${d.category}" data-sev="${d.severity}"
     data-text="${esc((d.title + ' ' + (d.desc||'')).toLowerCase())}">
 
-    <!-- Always visible: severity dot + title + sub-line + actions -->
-    <div class="fc-compact-header">
-      <div class="fc-sev-dot sev-dot-${d.severity}"></div>
-      <div class="fc-compact-body">
-        <div class="fc-compact-title">
-          <span class="fc-icon">${d.icon || '●'}</span>
-          <span class="fc-title">${esc(d.title)}</span>
-          <span style="font-size:10px;font-weight:600;padding:1px 7px;border-radius:99px;background:${cat.color}18;color:${cat.color};flex-shrink:0">${cat.label}</span>
-          ${d.source === 'gtf' ? `<span style="font-size:9px;font-weight:700;padding:1px 5px;border-radius:4px;background:#7c3aed22;color:#a371f7;flex-shrink:0;border:1px solid #7c3aed55;letter-spacing:.5px">GTF</span>` : ''}
-          ${d.count > 1 ? `<span style="font-size:10px;color:var(--muted)">${d.count.toLocaleString()}×</span>` : ''}
-        </div>
-        ${subLine ? `<div class="fc-compact-sub" title="${esc(d.detail || d.desc || '')}">${esc(subLine)}</div>` : ''}
+    <div class="fc-header">
+      <div class="fc-header-badges">
+        <span class="fc-sev-badge sev-${d.severity}">${d.severity.toUpperCase()}</span>
+        <span style="font-size:10px;font-weight:600;padding:2px 8px;border-radius:99px;background:${cat.color}18;color:${cat.color}">${cat.label}</span>
+        ${gtfBadge}${countBadge}
       </div>
-      <div class="fc-compact-actions">
-        <button class="fc-btn" id="fc-det-btn-${d.id}"
-          onclick="toggleFindingDetails('${d.id}',this)">Details ▾</button>
-        <button class="fc-btn${dismissed ? ' reviewed' : ''}"
+      <div class="fc-header-actions">
+        ${!isHigh ? `<button class="fc-expand-btn" id="fc-exp-btn-${d.id}" onclick="toggleFindingExpand('${d.id}',this)">▾ More</button>` : ''}
+        <button class="fc-dismiss-btn${dismissed ? ' reviewed' : ''}"
           onclick="dismissFinding('${d.id}')" title="${dismissed ? 'Restore' : 'Mark reviewed'}">
-          ${dismissed ? '↺' : '✓'}
+          ${dismissed ? '↺ Restore' : '✓ Reviewed'}
         </button>
       </div>
     </div>
 
-    <!-- Details panel: hidden by default -->
-    <div class="fc-details" id="fc-det-${d.id}" style="display:none">
-      ${d.detail ? `<div class="fc-detail">📊 ${esc(d.detail)}</div>` : ''}
-      ${d.desc    ? `<div class="fc-desc">${esc(d.desc)}</div>` : ''}
-      ${d.recommend ? `<div class="fc-rec">💡 ${renderRecommend(d.recommend)}</div>` : ''}
-      ${hasExamples ? `
-        <div style="margin-top:8px">
-          <button class="fc-btn" onclick="toggleFindingExamples('${d.id}',this)">
-            ▼ ${d.examples.length} log example${d.examples.length > 1 ? 's' : ''}
-          </button>
-        </div>
-        <div class="fc-examples" id="fc-ex-${d.id}" style="display:none">
-          ${d.examples.map(renderStyledLogLine).join('')}
-        </div>` : ''}
+    <div class="fc-title-row">
+      <span class="fc-icon">${d.icon || '●'}</span>
+      <span class="fc-title">${esc(d.title)}</span>
+    </div>
+    ${d.detail ? `<div class="fc-metric">📊 ${esc(d.detail)}</div>` : ''}
+
+    <div class="fc-body" id="fc-body-${d.id}" style="${isHigh ? '' : 'display:none'}">
+      ${bodyHtml}
     </div>
   </div>`;
 }
 
-function toggleFindingDetails(id, btn) {
-  const det = document.getElementById('fc-det-' + id);
-  if (!det) return;
-  const open = det.style.display !== 'none';
-  det.style.display = open ? 'none' : 'block';
-  btn.textContent   = open ? 'Details ▾' : 'Details ▴';
-  btn.classList.toggle('details-open', !open);
+function toggleFindingExpand(id, btn) {
+  const body = document.getElementById('fc-body-' + id);
+  if (!body) return;
+  const open = body.style.display !== 'none';
+  body.style.display = open ? 'none' : 'block';
+  btn.textContent = open ? '▾ More' : '▴ Less';
+  btn.classList.toggle('open', !open);
 }
 
 function toggleFindingExamples(id, btn) {
@@ -4843,8 +4856,8 @@ function toggleFindingExamples(id, btn) {
   const open = ex.style.display !== 'none';
   ex.style.display = open ? 'none' : 'block';
   btn.textContent  = open
-    ? btn.textContent.replace('▲','▼')
-    : btn.textContent.replace('▼','▲');
+    ? btn.textContent.replace('▴','▾')
+    : btn.textContent.replace('▾','▴');
 }
 
 function dismissFinding(id) {
