@@ -1171,7 +1171,7 @@ body {
 
 <script>
 // ─── Version ─────────────────────────────────────────────────────────────────
-const TOOL_VERSION = '1.15.10';
+const TOOL_VERSION = '1.15.11';
 
 // ─── State ────────────────────────────────────────────────────────────────────
 const state = {
@@ -6742,7 +6742,7 @@ function renderTimeline() {
     // Chip layout
     const chips = evs.map(({ ev, i }) => {
       const lbl = ev.label.length > MAX_LBL ? ev.label.slice(0, MAX_LBL-1)+'…' : ev.label;
-      const cW = Math.min(190, lbl.length * CHAR_W + ICON_W + CH_PAD * 2);
+      const cW = Math.min(200, lbl.length * CHAR_W + ICON_W + CH_PAD * 2 + 10);
       return { ev, i, lbl, cW, x: tsToX(ev.ms) };
     });
 
