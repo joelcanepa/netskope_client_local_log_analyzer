@@ -7017,7 +7017,7 @@ function tlTipToggleFull(btn) {
   full.style.flexDirection = 'column';
   btn.textContent = shown ? '▾ Show all' : '▴ Hide';
 }
-document.addEventListener('click', () => { if (_tlPinned >= 0) { _tlPinned = -1; tlTipHide(); } });
+document.addEventListener('click', e => { if (_tlPinned >= 0 && !document.getElementById('tl-tip')?.contains(e.target)) { _tlPinned = -1; tlTipHide(); } });
 
 function tlCopyText() {
   const events = tlBuildEvents('all', _tlQ);
