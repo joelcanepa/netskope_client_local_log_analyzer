@@ -5095,15 +5095,34 @@ function renderSysInfo() {
     'Traffic Mode','Tunnel Protocol','Tunnel Status','Gateway','Gateway POP',
     'BWAN URL','Steering Config','Tunnel Status Code','NPA Status Code','Last Connected IP',
   ];
-  const clientCfgRows = clientCfgFields.map(k => [k, s[k]]).filter(([,v]) => v);
-  if (clientCfgRows.length) panels.clientconfig = { icon: '⚙️', label: 'Client Config', html: diSection('Client Configuration', s['NS Client Version'] || '', diKvGrid(clientCfgRows), true) };
+  const enaDis = v => {
+    const lo = String(v).toLowerCase();
+    if (lo === 'enabled' || lo === 'yes' || lo === 'true')  return `<span class="dd-badge-enabled">${esc(v)}</span>`;
+    if (lo === 'disabled' || lo === 'no' || lo === 'false') return `<span class="dd-badge-disabled">${esc(v)}</span>`;
+    return esc(String(v));
+  };
+  const CFG_BADGE_FIELDS = new Set(['Auto Update','Fail Close']);
+  const CFG_CODE_FIELDS  = new Set(['Tunnel Protocol','Traffic Mode','Steering Config','Client Config']);
+  const clientCfgRows = clientCfgFields.map(k => {
+    const v = s[k];
+    if (!v) return null;
+    let val;
+    if (CFG_BADGE_FIELDS.has(k))     val = enaDis(v);
+    else if (CFG_CODE_FIELDS.has(k)) val = `<span class="dd-badge-configured">${esc(String(v))}</span>`;
+    else                              val = esc(String(v));
+    return [k, val];
+  }).filter(Boolean);
+  if (clientCfgRows.length) panels.clientconfig = { icon: '⚙️', label: 'Client Config', html: diSection('Client Configuration', s['NS Client Version'] || '', diKvGridRaw(clientCfgRows), true) };
 
   // EPDLP panel
   if (state.epdlp) {
     const ep = state.epdlp;
     const fmt = iso => { try { return new Date(iso).toLocaleString(); } catch { return iso; } };
-    const fallbackBadge = v => !v ? '' :
-      `<span style="color:${v==='block'?'#f85149':v==='allow'?'#3fb950':'#d29922'};font-weight:600">${v}</span>`;
+    const fallbackBadge = v => !v ? '' : v === 'block'
+      ? `<span class="dd-badge-disabled">${esc(v)}</span>`
+      : v === 'allow'
+      ? `<span class="dd-badge-enabled">${esc(v)}</span>`
+      : `<span class="dd-badge-configured">${esc(v)}</span>`;
     const epRows = [
       ['Version',              ep.version],
       ['Enrolled User',        ep.user],
@@ -5198,11 +5217,11 @@ function renderSysInfo() {
   if (state.dem) {
     const d = state.dem;
     const demRows = [
-      ['DEM Enabled', d.demServiceEnabled ? 'Yes' : 'No'],
-      ...(d.networkProbe ? [['Probe Name', d.networkProbe.name],['Frequency', d.networkProbe.frequency+'m']] : []),
-      ...(d.npa ? [['NPA Targets', d.npa.join(', ')]] : []),
+      ['DEM Enabled', d.demServiceEnabled ? `<span class="dd-badge-enabled">Enabled</span>` : `<span class="dd-badge-disabled">Disabled</span>`],
+      ...(d.networkProbe ? [['Probe Name', esc(d.networkProbe.name)],['Frequency', esc(d.networkProbe.frequency+'m')]] : []),
+      ...(d.npa ? [['NPA Targets', esc(d.npa.join(', '))]] : []),
     ];
-    panels.dem = { icon: '📡', label: 'DEM', html: diSection('DEM Configuration', d.demServiceEnabled ? 'Enabled' : 'Disabled', diKvGrid(demRows), true) };
+    panels.dem = { icon: '📡', label: 'DEM', html: diSection('DEM Configuration', d.demServiceEnabled ? 'Enabled' : 'Disabled', diKvGridRaw(demRows), true) };
   }
 
   // AI Discovery panel
@@ -5441,27 +5460,33 @@ function buildSummaryPanel() {
   const tunnelOk    = tunnelLabel === 'Connected';
   const npaOk       = npaLabel.startsWith('Connected') || npaLabel === 'Active';
 
-  const statusColor = (ok, val) => val === '—' ? '#6e7681'
-    : ok ? '#3fb950' : '#d29922';
+  const statusBadge = (label, ok, code) => {
+    if (label === '—') return '<span style="color:var(--muted)">—</span>';
+    const cls = ok ? 'dd-badge-enabled' : 'dd-badge-disabled';
+    return `<span class="${cls}">${esc(label)}</span>${code ? ` <span style="font-size:10px;opacity:.6">(${code})</span>` : ''}`;
+  };
 
   const dcStatus = state.nsuser?.cache?.DeviceClassificationStatus
     || state.nsuser?.DeviceClassificationStatus || '—';
   const dcCustom = state.nsuser?.cache?.DeviceClassificationCustomStatus || '';
+  const dcOk = dcStatus === 'managed';
+  const dcBadge = dcStatus === '—'
+    ? '<span style="color:var(--muted)">—</span>'
+    : `<span class="${dcOk ? 'dd-badge-enabled' : 'dd-badge-configured'}">${esc(dcStatus)}${dcCustom ? ` — ${esc(dcCustom)}` : ''}</span>`;
 
   // ── State at collection time ───────────────────────────────────
   let stateHtml = `<div class="di-kv-grid">`;
-  stateHtml += `<div class="di-kv-row"><span class="di-kv-label">SWG tunnel</span><span class="di-kv-val" style="color:${statusColor(tunnelOk, tunnelLabel)};font-weight:600">${esc(tunnelLabel)}${tunnelCode ? ` <span style="font-size:10px;opacity:.6">(${tunnelCode})</span>` : ''}</span></div>`;
-  stateHtml += `<div class="di-kv-row"><span class="di-kv-label">NPA tunnel</span><span class="di-kv-val" style="color:${statusColor(npaOk, npaLabel)};font-weight:600">${esc(npaLabel)}${npaCode ? ` <span style="font-size:10px;opacity:.6">(${npaCode})</span>` : ''}</span></div>`;
-  stateHtml += `<div class="di-kv-row"><span class="di-kv-label">Device classification</span><span class="di-kv-val">${esc(dcStatus)}${dcCustom ? ` — ${esc(dcCustom)}` : ''}</span></div>`;
+  stateHtml += `<div class="di-kv-row"><span class="di-kv-label">SWG tunnel</span><span class="di-kv-val">${statusBadge(tunnelLabel, tunnelOk, tunnelCode)}</span></div>`;
+  stateHtml += `<div class="di-kv-row"><span class="di-kv-label">NPA tunnel</span><span class="di-kv-val">${statusBadge(npaLabel, npaOk, npaCode)}</span></div>`;
+  stateHtml += `<div class="di-kv-row"><span class="di-kv-label">Device classification</span><span class="di-kv-val">${dcBadge}</span></div>`;
   if (ns.steering_config_name) stateHtml += `<div class="di-kv-row"><span class="di-kv-label">Steering config</span><span class="di-kv-val">${esc(ns.steering_config_name)}</span></div>`;
   if (s['Gateway'] || s['Gateway POP']) stateHtml += `<div class="di-kv-row"><span class="di-kv-label">Active gateway</span><span class="di-kv-val" style="font-family:monospace">${esc(s['Gateway'] || '')}${s['Gateway POP'] ? ` <span style="opacity:.7">(${esc(s['Gateway POP'])})</span>` : ''}</span></div>`;
   stateHtml += `</div>`;
 
   // ── Capability pills ───────────────────────────────────────────
   const pill = (label, on, hint = '') => {
-    const bg  = on ? 'rgba(63,185,80,.12)' : 'rgba(248,81,73,.08)';
-    const col = on ? '#3fb950' : '#6e7681';
-    return `<span title="${esc(hint)}" style="display:inline-flex;align-items:center;gap:4px;font-size:10px;padding:2px 8px;border-radius:99px;background:${bg};color:${col};font-weight:600;margin:2px 2px 2px 0;white-space:nowrap">${esc(label)}: ${on ? 'On' : 'Off'}</span>`;
+    const cls = on ? 'dd-badge-enabled' : 'dd-badge-disabled';
+    return `<span class="${cls}" title="${esc(hint)}" style="margin:2px 2px 2px 0;white-space:nowrap">${esc(label)}: ${on ? 'On' : 'Off'}</span>`;
   };
 
   const isDynamic   = ns.dynamic_steering == 1 || ns.dynamic_steering === true;
@@ -5592,24 +5617,27 @@ function buildDevClassPanel() {
   const dcStatus = cache.DeviceClassificationStatus || nu.DeviceClassificationStatus || 'not configured';
   const dcCustom = cache.DeviceClassificationCustomStatus || '';
 
-  const statusColor = dcStatus === 'managed' ? '#3fb950'
-    : dcStatus === 'not configured' ? '#6e7681' : '#d29922';
+  const dcBadgeCls = dcStatus === 'managed' ? 'dd-badge-enabled'
+    : dcStatus === 'not configured' ? 'dd-badge-disabled' : 'dd-badge-configured';
+  const dcBadgeHtml = `<span class="${dcBadgeCls}">${esc(dcStatus)}${dcCustom ? ` — ${esc(dcCustom)}` : ''}</span>`;
 
-  const statusRows = [['Classification status', `${dcStatus}${dcCustom ? ` — ${dcCustom}` : ''}`]];
+  const statusRows = [['Classification status', dcBadgeHtml]];
 
   if (uc.tunnelStatus != null) {
     const lbl = TUNNEL_STATUS[String(uc.tunnelStatus)] || `Code ${uc.tunnelStatus}`;
-    statusRows.push(['SWG tunnel (at collection)', lbl]);
+    const ok  = lbl === 'Connected';
+    statusRows.push(['SWG tunnel (at collection)', `<span class="${ok ? 'dd-badge-enabled' : 'dd-badge-disabled'}">${esc(lbl)}</span>`]);
   }
   if (uc.npaStatus != null) {
     const lbl = NPA_STATUS[String(uc.npaStatus)] || `Code ${uc.npaStatus}`;
-    statusRows.push(['NPA tunnel (at collection)', lbl]);
+    const ok  = lbl.startsWith('Connected') || lbl === 'Active';
+    statusRows.push(['NPA tunnel (at collection)', `<span class="${ok ? 'dd-badge-enabled' : 'dd-badge-disabled'}">${esc(lbl)}</span>`]);
   }
   if (state.nsdeviceidstatus?.latest_modified_time) {
-    statusRows.push(['Rule version', state.nsdeviceidstatus.latest_modified_time.split('T')[0]]);
+    statusRows.push(['Rule version', esc(state.nsdeviceidstatus.latest_modified_time.split('T')[0])]);
   }
 
-  let html = diSection('Classification status', dcStatus, diKvGrid(statusRows), true);
+  let html = diSection('Classification status', dcStatus, diKvGridRaw(statusRows), true);
 
   // ── Classification rules from nsdeviceid.json ──────────────────
   const rules = state.nsdeviceid?.device_classification_rules || {};
