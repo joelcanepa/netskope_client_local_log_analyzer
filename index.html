@@ -1171,7 +1171,7 @@ body {
 
 <script>
 // ─── Version ─────────────────────────────────────────────────────────────────
-const TOOL_VERSION = '1.14.3';
+const TOOL_VERSION = '1.14.4';
 
 // ─── State ────────────────────────────────────────────────────────────────────
 const state = {
@@ -10607,8 +10607,8 @@ function fpBuildNodes(group) {
 
   // Col 0: Identity
   nodes.push({ id:'user', type:'user', col:0, rowF:0,
-    label: userLabel.length>22 ? userLabel.slice(0,20)+'…' : userLabel,
-    fullLabel: userLabel, sub: state.sysinfo?.Hostname || '' });
+    label: userLabel.length>16 ? userLabel.slice(0,15)+'…' : userLabel,
+    fullLabel: userLabel, sub: (state.sysinfo?.Hostname||'').slice(0,22) });
 
   // Col 1: Applications (sorted by total desc, max 10)
   const procs = Object.entries(group.procMap)
@@ -10624,7 +10624,7 @@ function fpBuildNodes(group) {
     const paths = Object.entries(pd).filter(([k,n]) => k in FP_PATHS && n > 0).map(([k])=>k);
     const isAnomaly = (pd.npa > 0 && pd.direct > 0) || (pd.swg > 0 && pd.direct > 0);
     nodes.push({ id:`proc_${i}`, type:'process', col:1, rowF:i,
-      label: flShortProc(proc).slice(0,22), fullLabel: proc,
+      label: (s=>s.length>16?s.slice(0,15)+'…':s)(flShortProc(proc)), fullLabel: proc,
       paths, pd, hosts: [...pd.hosts], isAnomaly });
     edges.push({ from:'user', to:`proc_${i}`, type: paths[0] || 'direct' });
   });
@@ -10666,7 +10666,7 @@ function fpBuildNodes(group) {
       .filter(([k]) => k in FP_PATHS)
       .sort((a,b) => b[1]-a[1])[0]?.[0] || 'swg';
     nodes.push({ id:`dest_${j}`, type:'destination', col:3, rowF:j,
-      label: host.length>26 ? host.slice(0,24)+'…' : host,
+      label: host.length>16 ? host.slice(0,15)+'…' : host,
       fullLabel: host, dominant, hd, procs: [...hd.processes] });
     activePaths.forEach(([pathKey]) => {
       if (hd[pathKey] > 0) edges.push({ from:pathKey, to:`dest_${j}`, type:pathKey });
