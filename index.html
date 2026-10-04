@@ -901,6 +901,10 @@ body {
 .gib-label { font-size: 9px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 3px; }
 .gib-val { font-size: 13px; font-weight: 700; color: #e6edf3; }
 .gib-sub { font-size: 10px; color: var(--muted); margin-top: 1px; }
+/* ── Enabled / Disabled / Configured badges (GTF-style) ── */
+.dd-badge-enabled    { display:inline-block; padding:2px 9px; border-radius:99px; font-size:10px; font-weight:600; background:rgba(63,185,80,.15);  color:#3fb950; }
+.dd-badge-disabled   { display:inline-block; padding:2px 9px; border-radius:99px; font-size:10px; font-weight:600; background:rgba(240,136,62,.12); color:#f0883e; }
+.dd-badge-configured { display:inline-block; padding:2px 9px; border-radius:99px; font-size:10px; font-weight:600; background:rgba(88,166,255,.12);  color:var(--primary); word-break:break-all; }
 
 /* ── Scrollbar ── */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
@@ -5310,6 +5314,11 @@ function diKvGrid(rows) {
     `<div class="di-kv-row"><span class="di-kv-label">${esc(l)}</span><span class="di-kv-val">${esc(String(v||'—'))}</span></div>`
   ).join('')}</div>`;
 }
+function diKvGridRaw(rows) {
+  return `<div class="di-kv-grid">${rows.map(([l,v]) =>
+    `<div class="di-kv-row"><span class="di-kv-label">${esc(l)}</span><span class="di-kv-val">${v||'—'}</span></div>`
+  ).join('')}</div>`;
+}
 
 function diRtFilter(tableId, q) {
   q = q.toLowerCase().trim();
@@ -5503,23 +5512,25 @@ function buildSteeringPanel() {
   const STEER_METHOD = { '0': 'Cloud / Web', '1': 'Cloud Apps Only', '2': 'Web Traffic', '3': 'All Traffic' };
   const isDynamic = ns.dynamic_steering == 1 || ns.dynamic_steering === true;
 
-  const badge = (v, ok) => `<span style="font-size:10px;font-weight:600;padding:1px 7px;border-radius:3px;background:${ok ? 'rgba(63,185,80,.12)' : 'rgba(248,81,73,.08)'};color:${ok ? '#3fb950' : '#6e7681'}">${esc(v)}</span>`;
+  const enaBadge = v => v == 1
+    ? `<span class="dd-badge-enabled">Enabled</span>`
+    : `<span class="dd-badge-disabled">Disabled</span>`;
   const methodBadge = (code, noneKey) => {
-    if (ns[noneKey] == 1) return badge('None', false);
+    if (ns[noneKey] == 1) return `<span class="dd-badge-disabled">None</span>`;
     const name = STEER_METHOD[String(code)] || (code != null ? `Method ${code}` : '—');
-    return badge(name, code == 3 || code == 2 || code == 1);
+    const cls = String(code) === '0' || code == null ? 'dd-badge-disabled' : 'dd-badge-configured';
+    return `<span class="${cls}">${esc(name)}</span>`;
   };
-  const enaBadge = v => badge(v == 1 ? 'Enabled' : 'Disabled', v == 1);
 
   let html = '';
 
   // ── Global settings ────────────────────────────────────────────
   const globalRows = [
-    ['Config name',      ns.steering_config_name || '—'],
-    ['Dynamic steering', isDynamic ? 'Enabled' : 'Disabled'],
-    ...(ns.traffic_mode ? [['Traffic mode', ns.traffic_mode]] : []),
+    ['Config name',      esc(ns.steering_config_name || '—')],
+    ['Dynamic steering', enaBadge(isDynamic ? 1 : 0)],
+    ...(ns.traffic_mode ? [['Traffic mode', `<span class="dd-badge-configured">${esc(ns.traffic_mode)}</span>`]] : []),
   ];
-  html += diSection('Steering configuration', ns.steering_config_name || '', diKvGrid(globalRows), true);
+  html += diSection('Steering configuration', ns.steering_config_name || '', diKvGridRaw(globalRows), true);
 
   if (isDynamic) {
     const premSection = (prem, label) => {
@@ -5529,12 +5540,12 @@ function buildSteeringPanel() {
       const bwanKey   = prem === 'off' ? 'bwan_apps_off_prem' : 'bwan_apps_on_prem';
       const dnsKey    = prem === 'off' ? 'steer_dns_off_prem' : 'steer_dns_on_prem';
       const rows = [
-        ['Steering method', `${STEER_METHOD[String(ns[methodKey])] || (ns[noneKey]==1?'None':'—')}`],
-        ['Private Access',  ns[npaKey]  == 1 ? 'Enabled' : 'Disabled'],
-        ['SD-WAN',          ns[bwanKey] == 1 ? 'Enabled' : 'Disabled'],
-        ['DNS Security',    ns[dnsKey]  == 1 ? 'Enabled' : 'Disabled'],
+        ['Steering method', methodBadge(ns[methodKey], noneKey)],
+        ['Private Access',  enaBadge(ns[npaKey])],
+        ['SD-WAN',          enaBadge(ns[bwanKey])],
+        ['DNS Security',    enaBadge(ns[dnsKey])],
       ];
-      return diSection(label, '', diKvGrid(rows), true);
+      return diSection(label, '', diKvGridRaw(rows), true);
     };
     html += premSection('off', 'Off-premises');
     html += premSection('on',  'On-premises');
@@ -5544,12 +5555,12 @@ function buildSteeringPanel() {
       : ns.traffic_mode === 'web' ? 'Web Traffic'
       : ns.traffic_mode || '—';
     const rows = [
-      ['Steering method',  nonDynMethod],
-      ['Private Access',   ns.private_apps_off_prem == 1 || ns.private_apps_enabled == 1 ? 'Enabled' : 'Disabled'],
-      ['SD-WAN',           ns.bwan_apps_off_prem == 1 ? 'Enabled' : 'Disabled'],
-      ['DNS Security',     ns.steer_dns_off_prem == 1 || ns.steer_dns == 1 ? 'Enabled' : 'Disabled'],
+      ['Steering method',  `<span class="dd-badge-configured">${esc(nonDynMethod)}</span>`],
+      ['Private Access',   enaBadge(ns.private_apps_off_prem == 1 || ns.private_apps_enabled == 1 ? 1 : 0)],
+      ['SD-WAN',           enaBadge(ns.bwan_apps_off_prem == 1 ? 1 : 0)],
+      ['DNS Security',     enaBadge(ns.steer_dns_off_prem == 1 || ns.steer_dns == 1 ? 1 : 0)],
     ];
-    html += diSection('Steering method', '', diKvGrid(rows), true);
+    html += diSection('Steering method', '', diKvGridRaw(rows), true);
   }
 
   // ── Exception counts ───────────────────────────────────────────
