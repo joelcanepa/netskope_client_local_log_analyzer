@@ -1242,7 +1242,19 @@ body {
 
 <script>
 // ─── Version ─────────────────────────────────────────────────────────────────
-const TOOL_VERSION = '1.22.0';
+const TOOL_VERSION = '1.23.0';
+
+// Parse Netskope R-release tag from version string (e.g. '100.2.3.1410' → 'R141')
+function parseRTag(ver) {
+  if (!ver) return null;
+  const parts = ver.split('.');
+  if (parts.length < 4) return null;
+  const build = parseInt(parts[3], 10);
+  if (!isFinite(build) || build < 100) return null;
+  return 'R' + Math.floor(build / 10);
+}
+
+let _detectedFindings = []; // cached by renderFindings(), read by copyFindingToCase()
 
 // ─── State ────────────────────────────────────────────────────────────────────
 const state = {
@@ -1286,6 +1298,7 @@ const state = {
   zipFilename: null,
   epdlp: null,        // { version, user, deviceId, os, timezone, status, fallback, bypass, policyFingerprint, policyLastLoad }
   aiDiscovery: null,  // parsed ai_discovery_gef_debug.json
+  logTimeRange: null, // { first: 'YYYY/MM/DD HH:MM:SS', last: '...' } from parsed logs
   pcaps: {},          // filename -> ArrayBuffer for .pcap/.pcapng files
 };
 
@@ -1678,6 +1691,13 @@ function processFiles() {
     for (const f of logFiles) {
       state.parsedLogs[f] = parseLogs(f, state.files[f]);
     }
+    // Compute log time range (first/last timestamp across all parsed logs)
+    {
+      const tsPat = /^(\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2})/;
+      const allTs = Object.values(state.parsedLogs).flat()
+        .map(r => r.raw?.match(tsPat)?.[1]).filter(Boolean);
+      state.logTimeRange = allTs.length ? { first: allTs[0], last: allTs[allTs.length - 1] } : null;
+    }
 
     // Parse sysinfo
     if (state.files['SystemInfo.log']) {
@@ -2001,8 +2021,12 @@ function renderDeviceBar() {
   </div>` +
   `<div style="margin-left:auto"></div>`;
 
+  const rTag   = parseRTag(s['NS Client Version']);
+  const rangeStr = state.logTimeRange
+    ? ` · ${state.logTimeRange.first.slice(0,10)} ${state.logTimeRange.first.slice(11,16)} → ${state.logTimeRange.last.slice(11,16)}`
+    : '';
   document.getElementById('header-sub').textContent =
-    s['Hostname'] ? `${s['Hostname']} — ${userDisplay || ''}` : 'Loaded';
+    s['Hostname'] ? `${s['Hostname']}${rTag ? ' · ' + rTag : ''}${rangeStr}` : 'Loaded';
 
   bar.style.display = 'flex';
 }
@@ -4859,7 +4883,7 @@ function downloadReport() {
      </div>`;
   const tiles = [
     (s['Hostname']||s['Host Name'])    ? repTile('HOSTNAME', s['Hostname']||s['Host Name'], s['OS Name']||'') : null,
-    s['NS Client Version']             ? repTile('CLIENT', s['NS Client Version'], 'Netskope Client') : null,
+    s['NS Client Version']             ? repTile('CLIENT', s['NS Client Version'], (() => { const rt = parseRTag(s['NS Client Version']); return rt ? rt + ' · Netskope Client' : 'Netskope Client'; })()) : null,
     (s['Tenant Host']||s['Tenant ID']) ? repTile('TENANT', s['Tenant Host']||s['Tenant ID'], s['Tenant ID']||'') : null,
     repTile('SWG TUNNEL', ibTunnelLabel, ibTunnelCode ? `code ${ibTunnelCode}` : '', ibTunnelColor),
     repTile('NPA STATUS', ibNpaLabel, ibNpaCode ? `code ${ibNpaCode}` : '', ibNpaColor),
@@ -4989,7 +5013,7 @@ function downloadReport() {
 function renderFindings() {
   _findingsCat = new Set();
   _findingsSev = new Set();
-  const detected  = detectFindings();
+  const detected  = _detectedFindings = detectFindings();
   const actionable = detected.filter(d => d.severity === 'high' || d.severity === 'medium').length;
 
   // Tab badge
@@ -5113,6 +5137,12 @@ function renderFindingCard(d) {
   const hasExamples = d.examples && d.examples.length > 0;
   const exOpen      = d.severity === 'high' && hasExamples;
   const exCnt       = hasExamples ? d.examples.length : 0;
+  const logSearchTerm = hasExamples ? (() => {
+    const raw = typeof d.examples[0] === 'object' ? d.examples[0].raw : d.examples[0];
+    return raw.replace(/^\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2}\s*/, '')
+              .replace(/^\[\S+:\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\]\s*/, '')
+              .slice(0, 80).trim();
+  })() : '';
   const gtfBadge   = d.source === 'gtf'
     ? `<span style="font-size:9px;font-weight:700;padding:2px 6px;border-radius:4px;background:#7c3aed22;color:#a371f7;border:1px solid #7c3aed55;letter-spacing:.5px">GTF</span>`
     : '';
@@ -5129,6 +5159,10 @@ function renderFindingCard(d) {
       </button>
       <div class="fc-examples" id="fc-ex-${d.id}"${exOpen ? '' : ' style="display:none"'}>
         ${renderExamples(d.examples)}
+        <div style="padding:5px 8px;border-top:1px solid var(--border);display:flex;justify-content:flex-end">
+          <button class="fc-log-btn" onclick="jumpToLogViewer(${JSON.stringify(logSearchTerm)})"
+            title="Open Log Viewer pre-filtered to this pattern" style="font-size:10px">↗ Log Viewer</button>
+        </div>
       </div>` : ''}`;
 
   return `<div class="finding-card severity-${d.severity}${dismissed ? ' reviewed' : ''}"
@@ -5144,6 +5178,7 @@ function renderFindingCard(d) {
       </div>
       <div class="fc-header-actions">
         <button class="fc-expand-btn open" id="fc-exp-btn-${d.id}" onclick="toggleFindingExpand('${d.id}',this)">▴ Less</button>
+        <button class="fc-dismiss-btn" onclick="copyFindingToCase('${d.id}',this)" title="Copy finding as case note (Markdown)">📋 Copy</button>
         <button class="fc-dismiss-btn${dismissed ? ' reviewed' : ''}"
           onclick="dismissFinding('${d.id}')" title="${dismissed ? 'Restore' : 'Mark reviewed'}">
           ${dismissed ? '↺ Restore' : '✓ Reviewed'}
@@ -5170,6 +5205,45 @@ function toggleFindingExpand(id, btn) {
   body.style.display = open ? 'none' : 'block';
   btn.textContent = open ? '▾ More' : '▴ Less';
   btn.classList.toggle('open', !open);
+}
+
+function copyFindingToCase(id, btn) {
+  const d = _detectedFindings.find(x => x.id === id);
+  if (!d) return;
+  const CATS = Object.fromEntries(Object.entries(CATEGORIES).map(([k,v]) => [k, v.label]));
+  const catLabel = CATS[d.category] || d.category;
+  const lines = [];
+  lines.push(`**[${d.severity.toUpperCase()}] ${d.title}**`);
+  lines.push(`Category: ${catLabel}${d.count > 1 ? ` · ${d.count} occurrences` : ''}`);
+  if (d.detail) lines.push(`${d.detail}`);
+  lines.push('');
+  if (d.desc) lines.push(d.desc);
+  if (d.recommend) {
+    lines.push('');
+    lines.push(`💡 ${d.recommend.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')}`);
+  }
+  if (d.examples?.length) {
+    lines.push('');
+    lines.push(`Evidence (${d.examples.length} line${d.examples.length > 1 ? 's' : ''}):`);
+    d.examples.forEach(e => {
+      const raw = typeof e === 'object' ? e.raw : e;
+      lines.push(`  ${raw.slice(0, 200)}`);
+    });
+  }
+  const text = lines.join('\n');
+  navigator.clipboard?.writeText(text).then(() => {
+    if (btn) { const orig = btn.textContent; btn.textContent = '✓ Copied!'; setTimeout(() => { btn.textContent = orig; }, 1500); }
+  }).catch(() => {});
+}
+
+function jumpToLogViewer(text) {
+  setActiveTab('logs');
+  const el = document.getElementById('log-search');
+  if (el) {
+    el.value = text;
+    el.dispatchEvent(new Event('input'));
+    el.focus();
+  }
 }
 
 function toggleFindingExamples(id, btn) {
@@ -5550,14 +5624,19 @@ function renderSysInfo() {
     `<div class="gib-card"><div class="gib-label">${lbl}</div><div class="gib-val"${col ? ` style="color:${col}"` : ''}>${esc(val||'—')}</div>${sub ? `<div class="gib-sub">${esc(sub)}</div>` : ''}</div>`;
   const ibEl = document.getElementById('dd-id-bar');
   if (ibEl) {
+    const ibRTag = parseRTag(s['NS Client Version']);
+    const ibRange = state.logTimeRange
+      ? `${state.logTimeRange.first.slice(0,10)} ${state.logTimeRange.first.slice(11,16)} → ${state.logTimeRange.last.slice(11,16)}`
+      : null;
     const tiles = [
       (s['Hostname']||s['Host Name'])    ? ibGib('HOSTNAME', s['Hostname']||s['Host Name'], s['OS Name']||'') : null,
-      s['NS Client Version']             ? ibGib('CLIENT', s['NS Client Version'], 'Netskope Client') : null,
+      s['NS Client Version']             ? ibGib('CLIENT', s['NS Client Version'], ibRTag ? `${ibRTag} · Netskope Client` : 'Netskope Client') : null,
       (s['Tenant Host']||s['Tenant ID']) ? ibGib('TENANT', s['Tenant Host']||s['Tenant ID'], s['Tenant ID']||'') : null,
       ibGib('SWG TUNNEL', ibTunnelLabel, ibTunnelCode ? `code ${ibTunnelCode}` : '', ibTunnelColor),
       ibGib('NPA STATUS', ibNpaLabel, ibNpaCode ? `code ${ibNpaCode}` : '', ibNpaColor),
       s['User Email']                    ? ibGib('USER', s['User Email'], s['Pre-Auth User'] ? `pre-auth: ${s['Pre-Auth User']}` : '') : null,
       steerCfgName                       ? ibGib('STEERING', steerCfgName, '') : null,
+      ibRange                            ? ibGib('LOG RANGE', ibRange, '') : null,
     ].filter(Boolean);
     ibEl.innerHTML = tiles.join('');
     ibEl.style.display = tiles.length ? '' : 'none';
