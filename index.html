@@ -1242,7 +1242,7 @@ body {
 
 <script>
 // ─── Version ─────────────────────────────────────────────────────────────────
-const TOOL_VERSION = '1.17.0';
+const TOOL_VERSION = '1.20.0';
 
 // ─── State ────────────────────────────────────────────────────────────────────
 const state = {
@@ -4636,7 +4636,7 @@ function runGtfChecks(allLogs) {
       recommend: chk.rx,
       icon: sev === 'high' ? '🔴' : sev === 'medium' ? '🟡' : '🔵',
       count: n,
-      examples: matches.slice(0, 5).map(r => r.raw),
+      examples: matches.slice(0, 5).map(r => ({ raw: r.raw, file: r._srcFile || '' })),
       detail: null,
     });
   }
@@ -4658,6 +4658,19 @@ function renderStyledLogLine(raw) {
     ${ts ? `<span style="color:var(--muted);flex-shrink:0;white-space:nowrap">${esc(ts)}</span>` : ''}
     <span style="color:${c};overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(raw)}">${esc(rest)}</span>
   </div>`;
+}
+
+function renderExamples(examples) {
+  const groups = {};
+  (examples || []).forEach(e => {
+    const f = (typeof e === 'object') ? (e.file || '') : '';
+    const r = (typeof e === 'object') ? e.raw : e;
+    (groups[f] = groups[f] || []).push(r);
+  });
+  return Object.entries(groups).map(([file, lines]) =>
+    (file ? `<div style="padding:2px 8px;font-size:9px;color:var(--muted);background:var(--bg3);border-bottom:1px solid var(--border);font-family:monospace;letter-spacing:.3px">📄 ${esc(file)}</div>` : '') +
+    lines.map(renderStyledLogLine).join('')
+  ).join('');
 }
 
 function detectAppConflictFindings() {
@@ -4686,7 +4699,7 @@ function detectAppConflictFindings() {
 }
 
 function detectFindings() {
-  const allLogs = Object.values(state.parsedLogs).flat();
+  const allLogs = Object.entries(state.parsedLogs).flatMap(([file, rows]) => rows.map(r => ({ ...r, _srcFile: file })));
   const detected = [];
   for (const pattern of ISSUE_PATTERNS) {
     if (pattern.matchConfig) {
@@ -4703,7 +4716,7 @@ function detectFindings() {
     const matches = allLogs.filter(r => { try { return pattern.match(r); } catch { return false; } });
     if (matches.length > 0) {
       const detail = pattern.summarize ? pattern.summarize(matches) : null;
-      detected.push({ ...pattern, count: matches.length, examples: matches.slice(0, 5).map(r => r.raw), detail });
+      detected.push({ ...pattern, count: matches.length, examples: matches.slice(0, 5).map(r => ({ raw: r.raw, file: r._srcFile || '' })), detail });
     }
   }
   // Merge GTF checks alongside existing patterns
@@ -4908,6 +4921,8 @@ function renderFindingCard(d) {
   const cat         = CATEGORIES[d.category] || { label: d.category, color: '#8b949e' };
   const dismissed   = state.dismissedIssues.has(d.id);
   const hasExamples = d.examples && d.examples.length > 0;
+  const exOpen      = d.severity === 'high' && hasExamples;
+  const exCnt       = hasExamples ? d.examples.length : 0;
   const gtfBadge   = d.source === 'gtf'
     ? `<span style="font-size:9px;font-weight:700;padding:2px 6px;border-radius:4px;background:#7c3aed22;color:#a371f7;border:1px solid #7c3aed55;letter-spacing:.5px">GTF</span>`
     : '';
@@ -4920,10 +4935,10 @@ function renderFindingCard(d) {
     ${d.recommend ? `<div class="fc-rec">💡 ${renderRecommend(d.recommend)}</div>` : ''}
     ${hasExamples ? `
       <button class="fc-log-btn" onclick="toggleFindingExamples('${d.id}',this)">
-        ▾ ${d.examples.length} log line${d.examples.length > 1 ? 's' : ''}
+        ${exOpen ? '▴' : '▾'} Evidence (${exCnt} line${exCnt > 1 ? 's' : ''})
       </button>
-      <div class="fc-examples" id="fc-ex-${d.id}" style="display:none">
-        ${d.examples.map(renderStyledLogLine).join('')}
+      <div class="fc-examples" id="fc-ex-${d.id}"${exOpen ? '' : ' style="display:none"'}>
+        ${renderExamples(d.examples)}
       </div>` : ''}`;
 
   return `<div class="finding-card severity-${d.severity}${dismissed ? ' reviewed' : ''}"
@@ -4972,9 +4987,9 @@ function toggleFindingExamples(id, btn) {
   if (!ex) return;
   const open = ex.style.display !== 'none';
   ex.style.display = open ? 'none' : 'block';
-  btn.textContent  = open
-    ? btn.textContent.replace('▴','▾')
-    : btn.textContent.replace('▾','▴');
+  const m = btn.textContent.match(/\d+/);
+  const n = m ? parseInt(m[0], 10) : 0;
+  btn.textContent = `${open ? '▾' : '▴'} Evidence${n ? ` (${n} line${n > 1 ? 's' : ''})` : ''}`;
 }
 
 function dismissFinding(id) {
