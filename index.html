@@ -1171,7 +1171,7 @@ body {
 
 <script>
 // ─── Version ─────────────────────────────────────────────────────────────────
-const TOOL_VERSION = '1.15.9';
+const TOOL_VERSION = '1.15.10';
 
 // ─── State ────────────────────────────────────────────────────────────────────
 const state = {
@@ -6753,9 +6753,13 @@ function renderTimeline() {
       if (!c.dot) prevRight = c.x + c.cW / 2;
     });
 
-    // Dots render first so chip pills paint on top, hiding dots that fall inside a chip
+    // Pill bounds for dot filtering (with small buffer so edge-touching dots are also skipped)
+    const pillBounds = chips.filter(c => !c.dot).map(c => ({ l: c.x - c.cW/2 - 6, r: c.x + c.cW/2 + 6 }));
+
+    // Pass 1: dots — only render if the dot center is in open space between chips
     chips.forEach(c => {
       if (!c.dot) return;
+      if (pillBounds.some(b => c.x >= b.l && c.x <= b.r)) return;
       const fill = SEV_FILL[c.ev.sev] || '#8b949e';
       lanesClipSvg += `<circle cx="${c.x.toFixed(1)}" cy="${cy}" r="5" fill="${fill}" stroke="var(--bg)" stroke-width="1.5" opacity="${op}" style="cursor:pointer" onmouseover="tlTipShow(event,${c.i})" onmouseout="tlTipHide()" onclick="tlTipPin(event,${c.i})"/>`;
     });
