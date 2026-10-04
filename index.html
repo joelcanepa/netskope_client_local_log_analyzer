@@ -1219,7 +1219,7 @@ body {
 
 <script>
 // ─── Version ─────────────────────────────────────────────────────────────────
-const TOOL_VERSION = '1.16.7';
+const TOOL_VERSION = '1.16.8';
 
 // ─── State ────────────────────────────────────────────────────────────────────
 const state = {
@@ -4726,7 +4726,7 @@ function renderFindings() {
   const chips = Object.entries(byCategory).map(([cat, n]) => {
     const c = CATEGORIES[cat] || { label: cat, color: '#8b949e' };
     return `<button class="fl-fbtn" data-f="${cat}" onclick="findingsFilterCat('${cat}',this)"
-      style="background:${c.color}18;color:${c.color};border-color:${c.color}44">${c.label} ${n}</button>`;
+      style="background:${c.color}18;color:${c.color};border-color:${c.color}44">${c.label} <span class="fl-cat-count">${n}</span></button>`;
   }).join('');
 
   const SEV_HEX = { high:'#f85149', medium:'#d29922', warning:'#e8914e', low:'#8b949e', info:'#2f81f7' };
@@ -4907,18 +4907,72 @@ function dismissFinding(id) {
 }
 
 function findingsApplyFilters() {
-  const q           = (document.getElementById('findings-search')?.value || '').toLowerCase().trim();
+  const q = (document.getElementById('findings-search')?.value || '').toLowerCase().trim();
   const hideReviewed = document.getElementById('findings-hide-reviewed')?.checked;
 
+  // Step 1: show/hide finding cards
   document.querySelectorAll('.finding-card').forEach(c => {
-    const matchQ   = !q           || c.dataset.text?.includes(q);
+    const matchQ   = !q || c.dataset.text?.includes(q);
     const matchCat = _findingsCat.size === 0 || _findingsCat.has(c.dataset.cat);
     const matchSev = _findingsSev.size === 0 || _findingsSev.has(c.dataset.sev);
     const hidden   = hideReviewed && c.classList.contains('reviewed');
     c.style.display = (matchQ && matchCat && matchSev && !hidden) ? '' : 'none';
   });
 
-  // Hide severity dividers when all cards in that group are hidden
+  // Step 2: count visible findings by category and severity
+  const catCounts = {}, sevCounts = {};
+  document.querySelectorAll('.finding-card').forEach(c => {
+    if (c.style.display !== 'none') {
+      catCounts[c.dataset.cat] = (catCounts[c.dataset.cat] || 0) + 1;
+      sevCounts[c.dataset.sev] = (sevCounts[c.dataset.sev] || 0) + 1;
+    }
+  });
+
+  // Step 3: update category chip counts + opacity/ghost
+  const anySevFilter = _findingsSev.size > 0;
+  const anyCatFilter = _findingsCat.size > 0;
+  document.querySelectorAll('#findings-cat-group .fl-fbtn').forEach(b => {
+    if (b.dataset.f === 'all') {
+      b.classList.toggle('active', !anyCatFilter);
+      b.style.opacity = '';
+      return;
+    }
+    const cat = b.dataset.f;
+    const n = catCounts[cat] || 0;
+    const countEl = b.querySelector('.fl-cat-count');
+    if (countEl) countEl.textContent = n;
+    const isSelected = _findingsCat.has(cat);
+    b.style.borderWidth = isSelected ? '2px' : '';
+    if (anyCatFilter) {
+      b.style.opacity = isSelected ? '1' : (n > 0 ? '0.55' : '0.12');
+    } else if (anySevFilter) {
+      b.style.opacity = n > 0 ? '1' : '0.12';
+    } else {
+      b.style.opacity = '1';
+    }
+  });
+
+  // Step 4: update severity card counts + opacity/ghost
+  document.querySelectorAll('.fc-sev-card').forEach(b => {
+    const sev = b.dataset.s;
+    const n = sevCounts[sev] || 0;
+    const countEl = b.querySelector('.fc-sev-card-n');
+    if (countEl) countEl.textContent = n;
+    const isSelected = _findingsSev.has(sev);
+    const hex = b.dataset.hex || '#8b949e';
+    const r = parseInt(hex.slice(1,3),16), g = parseInt(hex.slice(3,5),16), bv = parseInt(hex.slice(5,7),16);
+    b.classList.toggle('active', isSelected);
+    b.style.background = isSelected ? `rgba(${r},${g},${bv},0.13)` : 'transparent';
+    if (anySevFilter) {
+      b.style.opacity = isSelected ? '1' : (n > 0 ? '0.55' : '0.12');
+    } else if (anyCatFilter) {
+      b.style.opacity = n > 0 ? '0.72' : '0.12';
+    } else {
+      b.style.opacity = '0.52';
+    }
+  });
+
+  // Step 5: hide severity dividers when all cards in that group are hidden
   document.querySelectorAll('.finding-divider').forEach(div => {
     const visible = document.querySelector(
       `.finding-card[data-sev="${div.dataset.sev}"]:not([style*="display: none"]):not([style*="display:none"])`
@@ -4935,17 +4989,6 @@ function findingsFilterCat(cat, btn) {
   } else {
     _findingsCat.add(cat);
   }
-  const anyActive = _findingsCat.size > 0;
-  document.querySelectorAll('#findings-cat-group .fl-fbtn').forEach(b => {
-    if (b.dataset.f === 'all') {
-      b.classList.toggle('active', !anyActive);
-      b.style.opacity = '';
-    } else {
-      const active = _findingsCat.has(b.dataset.f);
-      b.style.opacity = anyActive && !active ? '0.35' : '1';
-      b.style.borderWidth = active ? '2px' : '';
-    }
-  });
   findingsApplyFilters();
 }
 
@@ -4962,15 +5005,6 @@ function findingsBigCardFilter(sev, btn) {
   } else {
     _findingsSev.add(sev);
   }
-  const anyActive = _findingsSev.size > 0;
-  document.querySelectorAll('.fc-sev-card').forEach(b => {
-    const active = _findingsSev.has(b.dataset.s);
-    b.classList.toggle('active', active);
-    const hex = b.dataset.hex || '#8b949e';
-    const r = parseInt(hex.slice(1,3),16), g = parseInt(hex.slice(3,5),16), bv = parseInt(hex.slice(5,7),16);
-    b.style.background = active ? `rgba(${r},${g},${bv},0.13)` : 'transparent';
-    b.style.opacity    = active ? '1' : (anyActive ? '0.35' : '0.52');
-  });
   findingsApplyFilters();
 }
 
