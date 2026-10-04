@@ -1171,7 +1171,7 @@ body {
 
 <script>
 // ─── Version ─────────────────────────────────────────────────────────────────
-const TOOL_VERSION = '1.15.2';
+const TOOL_VERSION = '1.15.3';
 
 // ─── State ────────────────────────────────────────────────────────────────────
 const state = {
@@ -6658,14 +6658,18 @@ function renderTimeline() {
   cats.forEach(k => bycat[k] = []);
   allEvents.forEach((ev, i) => { if (bycat[ev.cat]) bycat[ev.cat].push({ ev, i }); });
 
-  // Time range
-  let minMs = Infinity, maxMs = -Infinity;
-  for (const ev of allEvents) { if (ev.ms < minMs) minMs = ev.ms; if (ev.ms > maxMs) maxMs = ev.ms; }
-  if (!allEvents.length) { minMs = Date.now() - 3600000; maxMs = Date.now(); }
-  const rawSpan = maxMs - minMs || 3600000;
-  const pad = rawSpan * 0.05;
-  minMs -= pad; maxMs += pad;
-  const span = maxMs - minMs;
+  // Full data time range
+  let dataMin = Infinity, dataMax = -Infinity;
+  for (const ev of allEvents) { if (ev.ms < dataMin) dataMin = ev.ms; if (ev.ms > dataMax) dataMax = ev.ms; }
+  if (!allEvents.length) { dataMin = Date.now() - 3600000; dataMax = Date.now(); }
+  const rawSpan = dataMax - dataMin || 3600000;
+  const fullPad = rawSpan * 0.05;
+  const fullMin = dataMin - fullPad, fullMax = dataMax + fullPad;
+
+  // Apply zoom (or full range)
+  const vMin = _tlZoom ? _tlZoom.startMs : fullMin;
+  const vMax = _tlZoom ? _tlZoom.endMs   : fullMax;
+  const span = vMax - vMin;
 
   // Layout
   const W = Math.max(600, el.clientWidth || 900);
@@ -6680,7 +6684,10 @@ function renderTimeline() {
   // Chip geometry
   const CHIP_H = 26, CHIP_R = 13, CH_PAD = 10, CHAR_W = 6.3, ICON_W = 15, MAX_LBL = 20;
 
-  const tsToX = ms => LW + ((ms - minMs) / span) * CW;
+  const tsToX = ms => LW + ((ms - vMin) / span) * CW;
+
+  // Store layout for brush handlers
+  _tlLayout = { W, LW, CW, MR, MT, AXIS_Y: MT + cats.length * LANE_H, vMin, vMax };
 
   // Tick density
   const spanMin = span / 60000;
@@ -6781,11 +6788,31 @@ function renderTimeline() {
 
   const divSvg = `<line x1="${LW}" y1="${MT}" x2="${LW}" y2="${AXIS_Y}" stroke="var(--border)" stroke-width="1" opacity="0.5"/>`;
 
+  // Clip path keeps chips inside the chart area when zoomed
+  const defsSvg = `<defs><clipPath id="tl-clip"><rect x="${LW}" y="${MT}" width="${CW}" height="${AXIS_Y - MT}"/></clipPath></defs>`;
+
+  // Brush selection rect (hidden until drag starts) + axis overlay for drag-to-zoom
+  const brushSvg = `
+    <rect id="tl-bsel" x="${LW}" y="${MT}" width="0" height="${AXIS_Y - MT}"
+      fill="rgba(88,166,255,0.08)" stroke="#58a6ff" stroke-width="1.2" stroke-dasharray="4,3"
+      pointer-events="none" display="none"/>
+    <rect x="${LW}" y="${AXIS_Y - 8}" width="${CW}" height="${AXIS_H + 10}"
+      fill="transparent" style="cursor:crosshair"
+      onmousedown="tlBrushDown(event)" ondblclick="tlZoomReset()"/>
+    <text x="${LW + CW/2}" y="${AXIS_Y + AXIS_H - 2}" font-size="9" text-anchor="middle"
+      fill="var(--muted)" opacity="0.35">drag to zoom · double-click to reset</text>`;
+
   const totalEvts = allEvents.length;
+  const zoomBadge = _tlZoom ? `<span style="display:flex;align-items:center;gap:5px;font-size:11px;color:#58a6ff">
+    🔍 zoomed
+    <button class="fl-fbtn" onclick="tlZoomReset()" style="font-size:10px;color:#58a6ff;border-color:#58a6ff;background:rgba(88,166,255,.1);padding:2px 8px">✕ reset</button>
+  </span>` : '';
+
   el.innerHTML = `
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
       <span style="font-size:12px;font-weight:600;color:var(--text)">Session Timeline</span>
       <span style="font-size:11px;color:var(--muted)">${totalEvts} event${totalEvts!==1?'s':''}</span>
+      ${zoomBadge}
       <span style="flex:1"></span>
       <input id="tl-search" type="text" placeholder="Filter events…" value="${_tlQ.replace(/"/g,'&quot;')}"
         oninput="_tlQ=this.value;renderTimeline()"
@@ -6794,19 +6821,84 @@ function renderTimeline() {
     </div>
     <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;overflow:hidden">
       <svg id="tl-svg" viewBox="0 0 ${W} ${SVG_H}" xmlns="http://www.w3.org/2000/svg"
-        style="width:100%;height:auto;display:block;font-family:var(--font-mono,monospace)">
-        ${gridSvg}${lanesSvg}${axisSvg}${divSvg}
+        style="width:100%;height:auto;display:block;font-family:var(--font-mono,monospace)"
+        onmousemove="tlBrushMove(event)" onmouseup="tlBrushUp(event)" onmouseleave="tlBrushCancel()">
+        ${defsSvg}
+        ${gridSvg}
+        <g clip-path="url(#tl-clip)">${lanesSvg}</g>
+        ${axisSvg}${divSvg}${brushSvg}
       </svg>
     </div>
     <div id="tl-tip" style="display:none;position:fixed;background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:11px 15px;font-size:12px;color:var(--text);pointer-events:none;z-index:9999;min-width:200px;max-width:300px;line-height:1.6;box-shadow:0 4px 24px rgba(0,0,0,.35)"></div>`;
 }
 
 
+let _tlZoom   = null; // { startMs, endMs } | null
+let _tlBrush  = { down: false, startX: 0, dragging: false };
+let _tlLayout = null; // layout params set by renderTimeline for brush handlers
+
+function tlSvgX(e) {
+  const svg = document.getElementById('tl-svg');
+  if (!svg || !_tlLayout) return 0;
+  const r = svg.getBoundingClientRect();
+  return (e.clientX - r.left) * (_tlLayout.W / r.width);
+}
+function tlXtoMs(svgX) {
+  if (!_tlLayout) return 0;
+  const { LW, CW, vMin, vMax } = _tlLayout;
+  return vMin + ((svgX - LW) / CW) * (vMax - vMin);
+}
+function tlBrushDown(e) {
+  if (!_tlLayout) return;
+  const x = tlSvgX(e), { LW, W, MR } = _tlLayout;
+  if (x < LW || x > W - MR) return;
+  _tlBrush = { down: true, startX: x, dragging: false };
+  e.preventDefault();
+}
+function tlBrushMove(e) {
+  if (!_tlBrush.down || !_tlLayout) return;
+  const { LW, W, MR, MT, AXIS_Y } = _tlLayout;
+  const x = Math.max(LW, Math.min(W - MR, tlSvgX(e)));
+  if (Math.abs(x - _tlBrush.startX) > 4) {
+    _tlBrush.dragging = true;
+    const bsel = document.getElementById('tl-bsel');
+    if (bsel) {
+      const x1 = Math.min(_tlBrush.startX, x), x2 = Math.max(_tlBrush.startX, x);
+      bsel.setAttribute('x', x1.toFixed(1));
+      bsel.setAttribute('width', (x2 - x1).toFixed(1));
+      bsel.removeAttribute('display');
+    }
+  }
+}
+function tlBrushUp(e) {
+  if (!_tlBrush.down || !_tlLayout) return;
+  const { LW, W, MR } = _tlLayout;
+  const startX = _tlBrush.startX;
+  const endX = Math.max(LW, Math.min(W - MR, tlSvgX(e)));
+  const wasDrag = _tlBrush.dragging;
+  _tlBrush = { down: false, startX: 0, dragging: false };
+  const bsel = document.getElementById('tl-bsel');
+  if (bsel) bsel.setAttribute('display', 'none');
+  if (!wasDrag) return;
+  const x1 = Math.min(startX, endX), x2 = Math.max(startX, endX);
+  if (x2 - x1 < 8) return;
+  _tlZoom = { startMs: tlXtoMs(x1), endMs: tlXtoMs(x2) };
+  renderTimeline();
+}
+function tlBrushCancel() {
+  if (!_tlBrush.down) return;
+  _tlBrush = { down: false, startX: 0, dragging: false };
+  const bsel = document.getElementById('tl-bsel');
+  if (bsel) bsel.setAttribute('display', 'none');
+}
+function tlZoomReset() { _tlZoom = null; renderTimeline(); }
+
 function tlSetCat(cat) { _tlCat = cat; renderTimeline(); }
 
 let _tlPinned = -1;
 
 function tlTipShow(e, idx) {
+  if (_tlBrush.dragging) return;
   if (_tlPinned >= 0 && _tlPinned !== idx) return;
   _tlRenderTip(e.clientX, e.clientY, idx);
 }
