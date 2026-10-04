@@ -1242,7 +1242,7 @@ body {
 
 <script>
 // ─── Version ─────────────────────────────────────────────────────────────────
-const TOOL_VERSION = '1.20.0';
+const TOOL_VERSION = '1.21.0';
 
 // ─── State ────────────────────────────────────────────────────────────────────
 const state = {
@@ -4799,6 +4799,193 @@ function buildBundleHealth() {
   </details>`;
 }
 
+// ── Export Report ─────────────────────────────────────────────────────────────
+function renderExportCard(d) {
+  const SEV_C = { high:'#f85149', medium:'#e3b341', warning:'#e8914e', low:'#8b949e', info:'#2f81f7' };
+  const borderC = SEV_C[d.severity] || '#30363d';
+  const cat = CATEGORIES[d.category] || { label: d.category, color: '#8b949e' };
+  const gtfBadge = d.source === 'gtf'
+    ? `<span style="font-size:9px;font-weight:700;padding:2px 6px;border-radius:4px;background:#7c3aed22;color:#a371f7;border:1px solid #7c3aed55;letter-spacing:.5px">GTF</span>`
+    : '';
+  const countBadge = d.count > 1
+    ? `<span style="font-size:10px;color:#8b949e;background:#1c2128;border:1px solid #30363d;padding:1px 7px;border-radius:99px">${d.count.toLocaleString()}×</span>`
+    : '';
+  const evidenceHtml = d.examples?.length ? renderExamples(d.examples) : '';
+  return `<div style="background:#161b22;border:1px solid #30363d;border-left:5px solid ${borderC};border-radius:10px;padding:16px 20px;margin-bottom:12px${d.severity==='high'?`;background:linear-gradient(100deg,rgba(248,81,73,.05) 0%,#161b22 55%)`:''}">
+    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:10px">
+      <span style="font-size:10px;font-weight:700;padding:2px 9px;border-radius:99px;letter-spacing:.07em;text-transform:uppercase;background:${borderC}22;color:${borderC}">${d.severity.toUpperCase()}</span>
+      <span style="font-size:10px;font-weight:600;padding:2px 8px;border-radius:99px;background:${cat.color}18;color:${cat.color}">${cat.label}</span>
+      ${gtfBadge}${countBadge}
+    </div>
+    <div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:8px">
+      <span style="font-size:18px;flex-shrink:0;line-height:1.4">${d.icon||'●'}</span>
+      <span style="font-size:17px;font-weight:700;color:#e6edf3;line-height:1.3;letter-spacing:-.01em">${esc(d.title)}</span>
+    </div>
+    ${d.detail ? `<div style="display:inline-block;font-family:monospace;font-size:12px;color:#2f81f7;background:#1c2128;border-radius:5px;padding:5px 11px;margin:4px 0 0;border:1px solid #30363d">📊 ${esc(d.detail)}</div>` : ''}
+    <div style="margin-top:14px;padding-top:14px;border-top:1px solid #30363d">
+      ${d.desc ? `<p style="font-size:13.5px;color:#e6edf3;opacity:.75;line-height:1.65;margin-bottom:12px">${esc(d.desc)}</p>` : ''}
+      ${d.recommend ? `<div style="font-size:13px;color:#e6edf3;line-height:1.65;background:rgba(63,185,80,.08);border:1px solid rgba(63,185,80,.22);border-left:3px solid #3fb950;border-radius:0 6px 6px 0;padding:10px 14px;margin-bottom:12px">💡 ${renderRecommend(d.recommend)}</div>` : ''}
+      ${evidenceHtml ? `<div style="font-size:11px;color:#8b949e;font-weight:600;margin-bottom:4px;text-transform:uppercase;letter-spacing:.05em">Evidence</div><div style="border:1px solid #30363d;border-radius:6px;overflow:hidden;max-height:none">${evidenceHtml}</div>` : ''}
+    </div>
+  </div>`;
+}
+
+function downloadReport() {
+  const detected = detectFindings();
+  if (!detected.length) { alert('No findings to export.'); return; }
+  const s = state.sysinfo || {};
+  const now = new Date();
+  const dateStr = now.toLocaleDateString(undefined, { year:'numeric', month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' });
+  const hostname = s['Hostname'] || s['Host Name'] || 'Unknown';
+
+  // Identity tiles
+  const uc2 = (state.nsuser?.userConfig) || {};
+  const ibTunnelCode = uc2.tunnelStatus != null ? String(uc2.tunnelStatus) : null;
+  const ibNpaCode    = uc2.npaStatus    != null ? String(uc2.npaStatus)    : null;
+  const TSTATUS = {'0':'Disabled','8':'Disconnected','21':'Disabled','22':'Connected','1':'Connected'};
+  const NSTATUS = {'0':'Active','1':'Connecting','2':'Connected (GW)','3':'Auth Failed','4':'Connected','5':'Connected','6':'Not enrolled'};
+  const ibTunnelLabel = ibTunnelCode != null ? (TSTATUS[ibTunnelCode] || `Code ${ibTunnelCode}`) : '—';
+  const ibNpaLabel    = ibNpaCode    != null ? (NSTATUS[ibNpaCode]    || `Code ${ibNpaCode}`)    : '—';
+  const ibTunnelOk    = ibTunnelLabel === 'Connected';
+  const ibNpaOk       = ibNpaLabel.startsWith('Connected') || ibNpaLabel === 'Active';
+  const ibTunnelColor = ibTunnelCode == null ? '#6e7681' : ibTunnelOk ? '#3fb950' : '#d29922';
+  const ibNpaColor    = ibNpaCode    == null ? '#6e7681' : ibNpaOk    ? '#3fb950' : '#d29922';
+  const steerCfgName  = s['Steering Config'] || (state.steering||{}).steering_config_name;
+  const repTile = (lbl, val, sub, col) =>
+    `<div style="background:#1c2128;border:1px solid #30363d;border-radius:6px;padding:6px 12px;min-width:90px">
+       <div style="font-size:9px;color:#8b949e;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">${esc(lbl)}</div>
+       <div style="font-size:13px;font-weight:700;color:${col||'#e6edf3'}">${esc(val||'—')}</div>
+       ${sub ? `<div style="font-size:10px;color:#8b949e;margin-top:1px">${esc(sub)}</div>` : ''}
+     </div>`;
+  const tiles = [
+    (s['Hostname']||s['Host Name'])    ? repTile('HOSTNAME', s['Hostname']||s['Host Name'], s['OS Name']||'') : null,
+    s['NS Client Version']             ? repTile('CLIENT', s['NS Client Version'], 'Netskope Client') : null,
+    (s['Tenant Host']||s['Tenant ID']) ? repTile('TENANT', s['Tenant Host']||s['Tenant ID'], s['Tenant ID']||'') : null,
+    repTile('SWG TUNNEL', ibTunnelLabel, ibTunnelCode ? `code ${ibTunnelCode}` : '', ibTunnelColor),
+    repTile('NPA STATUS', ibNpaLabel, ibNpaCode ? `code ${ibNpaCode}` : '', ibNpaColor),
+    s['User Email']                    ? repTile('USER', s['User Email'], s['Pre-Auth User'] ? `pre-auth: ${s['Pre-Auth User']}` : '') : null,
+    steerCfgName                       ? repTile('STEERING', steerCfgName) : null,
+  ].filter(Boolean);
+  const identityHtml = tiles.length
+    ? `<div style="display:flex;flex-wrap:wrap;gap:8px;padding:12px 0 18px">${tiles.join('')}</div>` : '';
+
+  // Bundle health (expanded flat view for the report)
+  const TRACKED_EXP = [
+    { f: null, label: 'nsdebuglog', tier: 'core', check: () => !!(state.files['nsdebuglog.log']||state.files['nsDiag.log']||state.files['nsAppUI.log']) },
+    { f: 'nsconfig.json',               label: 'nsconfig',      tier: 'core' },
+    { f: null, label: 'npadebug',       tier: 'key',  check: () => !!(state.files['npadebuglog.log']||state.files['npadebuglog.1.log']) },
+    { f: 'SystemInfo.log',              label: 'SystemInfo',    tier: 'key' },
+    { f: 'nssteering.json',             label: 'nssteering',    tier: 'key' },
+    { f: 'nsuser.conf',                 label: 'nsuser',        tier: 'key' },
+    { f: 'nsbypass.json',               label: 'nsbypass',      tier: 'extended' },
+    { f: 'nsdeviceid.json',             label: 'nsdeviceid',    tier: 'extended' },
+    { f: 'dem.json',                    label: 'dem',           tier: 'extended' },
+    { f: 'nsuserconfig.json',           label: 'nsuserconfig',  tier: 'extended' },
+    { f: 'network-state.log',           label: 'network-state', tier: 'extended' },
+    { f: 'appInfo.log',                 label: 'appInfo',       tier: 'extended' },
+    { f: 'eventcache.json',             label: 'eventcache',    tier: 'extended' },
+    { f: 'nsbwanconfig.json',           label: 'nsbwanconfig',  tier: 'extended' },
+    { f: 'ai_discovery_gef_debug.json', label: 'ai_discovery',  tier: 'extended' },
+  ];
+  const bhRows = TRACKED_EXP.map(t => ({ ...t, present: t.check ? t.check() : !!state.files[t.f] }));
+  const bhPresent = bhRows.filter(r => r.present);
+  const bhAbsent  = bhRows.filter(r => !r.present);
+  const bhCoreAbsent = bhAbsent.filter(r => r.tier === 'core');
+  const bhKeyAbsent  = bhAbsent.filter(r => r.tier === 'key');
+  const bhStatus = bhCoreAbsent.length ? '🔴 Missing critical files' : bhKeyAbsent.length ? '⚠️ Missing key files' : '✅ Complete bundle';
+  const bhStatusColor = bhCoreAbsent.length ? '#f85149' : bhKeyAbsent.length ? '#f0883e' : '#3fb950';
+  const bhPill = (r, ok) => `<span style="font-size:10px;padding:1px 7px;border-radius:3px;font-family:monospace;white-space:nowrap;background:${ok?'rgba(63,185,80,.08)':'rgba(240,136,62,.12)'};color:${ok?'#3fb950':'#f0883e'}">${esc(r.label)}</span>`;
+  const bhPills = [...bhPresent.map(r=>bhPill(r,true)), ...bhAbsent.map(r=>bhPill(r,false))].join(' ');
+  const healthHtml = `<div style="background:#161b22;border:1px solid #30363d;border-radius:8px;padding:12px 16px;margin-bottom:18px">
+    <div style="font-size:12px;font-weight:700;color:${bhStatusColor};margin-bottom:8px">${bhStatus} — ${bhPresent.length}/${bhRows.length} files present</div>
+    <div style="display:flex;flex-wrap:wrap;gap:4px">${bhPills}</div>
+  </div>`;
+
+  // Findings grouped by severity
+  const SEV_ORDER = ['high','medium','warning','low','info'];
+  const SEV_META_EXP = {
+    high:    { label:'High Severity',   dot:'🔴', color:'#f85149' },
+    medium:  { label:'Medium Severity', dot:'🟡', color:'#e3b341' },
+    warning: { label:'Warning',         dot:'🟠', color:'#e8914e' },
+    low:     { label:'Low Severity',    dot:'🔵', color:'#8b949e' },
+    info:    { label:'Informational',   dot:'ℹ️',  color:'#2f81f7' },
+  };
+  let findingsHtml = '';
+  let totalShown = 0;
+  for (const sev of SEV_ORDER) {
+    const group = detected.filter(d => d.severity === sev);
+    if (!group.length) continue;
+    const meta = SEV_META_EXP[sev];
+    findingsHtml += `<div style="display:flex;align-items:center;gap:10px;margin:22px 0 8px;padding-bottom:6px;border-bottom:1px solid #30363d">
+      <span style="font-size:14px">${meta.dot}</span>
+      <span style="font-size:12px;font-weight:700;color:${meta.color};text-transform:uppercase;letter-spacing:.07em">${meta.label}</span>
+      <span style="font-size:11px;color:#8b949e">${group.length} finding${group.length!==1?'s':''}</span>
+      <div style="flex:1;height:1px;background:#30363d"></div>
+    </div>`;
+    for (const d of group) {
+      findingsHtml += renderExportCard(d);
+      totalShown++;
+    }
+  }
+
+  // Capability snapshot (what was/wasn't available from bundle)
+  const bundleName = state.zipName || 'diagnostic bundle';
+
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Netskope Diagnostic Report — ${esc(hostname)}</title>
+  <style>
+    :root{--bg:#0d1117;--bg1:#111318;--bg2:#161b22;--bg3:#1c2128;--border:#30363d;--primary:#2f81f7;--error:#f85149;--warning:#e3b341;--success:#3fb950;--debug:#8b949e;--text:#e6edf3;--muted:#8b949e}
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);color:var(--text);line-height:1.5;padding:0}
+    a{color:#58a6ff}
+    @media print{body{background:#fff;color:#000}.no-print{display:none}.finding-card{break-inside:avoid}}
+  </style>
+</head>
+<body>
+<div style="max-width:880px;margin:0 auto;padding:28px 24px 60px">
+
+  <!-- Report header -->
+  <div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:6px">
+    <div>
+      <div style="font-size:11px;font-weight:700;color:#8b949e;text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px">Netskope</div>
+      <h1 style="font-size:24px;font-weight:800;color:#e6edf3;letter-spacing:-.02em;margin-bottom:4px">Diagnostic Report</h1>
+      <div style="font-size:12px;color:#8b949e">${esc(bundleName)}</div>
+    </div>
+    <div style="text-align:right;font-size:11px;color:#8b949e;line-height:1.8">
+      <div>Generated ${esc(dateStr)}</div>
+      <div>NLA v${esc(TOOL_VERSION)}</div>
+      <div style="color:#3fb950;font-weight:600">${totalShown} finding${totalShown!==1?'s':''}</div>
+    </div>
+  </div>
+
+  <hr style="border:none;border-top:1px solid #30363d;margin:16px 0">
+
+  ${identityHtml}
+  ${healthHtml}
+  ${findingsHtml || '<p style="color:#8b949e;text-align:center;padding:40px">No findings detected.</p>'}
+
+  <div style="margin-top:40px;padding-top:16px;border-top:1px solid #30363d;font-size:11px;color:#8b949e;text-align:center">
+    Generated by Netskope Log Analyzer v${esc(TOOL_VERSION)} · ${esc(dateStr)}
+  </div>
+</div>
+</body>
+</html>`;
+
+  const blob = new Blob([html], { type: 'text/html' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = `netskope-report-${hostname.replace(/[^a-z0-9]/gi,'-').toLowerCase()}-${now.toISOString().slice(0,10)}.html`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
 function renderFindings() {
   _findingsCat = new Set();
   _findingsSev = new Set();
@@ -4863,6 +5050,9 @@ function renderFindings() {
         </div>
         <div style="flex:1"></div>
         <span id="findings-total-count" style="font-size:11px;color:var(--muted)">${detected.length} total</span>
+        <button onclick="downloadReport()" title="Download self-contained HTML report"
+          style="font-size:11px;padding:3px 10px;border-radius:5px;cursor:pointer;background:var(--bg3);color:var(--muted);border:1px solid var(--border);display:inline-flex;align-items:center;gap:4px;transition:color .12s"
+          onmouseover="this.style.color='var(--text)'" onmouseout="this.style.color='var(--muted)'">⬇ Report</button>
         <input id="findings-search" class="search-box" placeholder="🔍 Filter…"
           oninput="findingsApplyFilters()"
           style="width:160px;font-size:11px;padding:3px 8px">
