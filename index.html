@@ -1219,7 +1219,7 @@ body {
 
 <script>
 // ─── Version ─────────────────────────────────────────────────────────────────
-const TOOL_VERSION = '1.16.8';
+const TOOL_VERSION = '1.16.9';
 
 // ─── State ────────────────────────────────────────────────────────────────────
 const state = {
@@ -4761,7 +4761,7 @@ function renderFindings() {
           ${chips}
         </div>
         <div style="flex:1"></div>
-        <span style="font-size:11px;color:var(--muted)">${detected.length} total</span>
+        <span id="findings-total-count" style="font-size:11px;color:var(--muted)">${detected.length} total</span>
         <input id="findings-search" class="search-box" placeholder="🔍 Filter…"
           oninput="findingsApplyFilters()"
           style="width:160px;font-size:11px;padding:3px 8px">
@@ -4921,12 +4921,16 @@ function findingsApplyFilters() {
 
   // Step 2: count visible findings by category and severity
   const catCounts = {}, sevCounts = {};
+  let visibleTotal = 0;
   document.querySelectorAll('.finding-card').forEach(c => {
     if (c.style.display !== 'none') {
       catCounts[c.dataset.cat] = (catCounts[c.dataset.cat] || 0) + 1;
       sevCounts[c.dataset.sev] = (sevCounts[c.dataset.sev] || 0) + 1;
+      visibleTotal++;
     }
   });
+  const totalEl = document.getElementById('findings-total-count');
+  if (totalEl) totalEl.textContent = visibleTotal + ' total';
 
   // Step 3: update category chip counts + opacity/ghost
   const anySevFilter = _findingsSev.size > 0;
