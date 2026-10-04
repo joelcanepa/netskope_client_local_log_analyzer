@@ -320,6 +320,41 @@ body {
 .filter-btn.regex-active  { background: rgba(88,166,255,0.18);  color: var(--info);    border-color: var(--info); }
 .filter-btn.invert-active { background: rgba(248,81,73,0.15);   color: var(--error);   border-color: var(--error); }
 .tl-dot { display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:5px;vertical-align:middle; }
+.fl-fbtn {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 9px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  transition: all 0.12s;
+  white-space: nowrap;
+}
+.fl-fbtn:hover { color: var(--text); border-color: var(--text2,var(--muted)); }
+.fl-fbtn.active { background: rgba(88,166,255,0.12); color: var(--primary); border-color: var(--primary); }
+.fp-mode-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 8px 4px;
+  flex: 1;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 600;
+  transition: all 0.12s;
+  line-height: 1.2;
+}
+.fp-mode-btn .fp-mode-icon { font-size: 17px; line-height: 1; }
+.fp-mode-btn:hover { color: var(--text); border-color: var(--text2,var(--muted)); background: var(--bg2,var(--bg3)); }
+.fp-mode-btn.active { background: rgba(88,166,255,0.12); color: var(--primary); border-color: var(--primary); box-shadow: 0 0 0 1px var(--primary); }
 
 .file-select {
   background: var(--bg3);
@@ -1133,7 +1168,7 @@ body {
 
 <script>
 // ─── Version ─────────────────────────────────────────────────────────────────
-const TOOL_VERSION = '1.14.0';
+const TOOL_VERSION = '1.14.1';
 
 // ─── State ────────────────────────────────────────────────────────────────────
 const state = {
@@ -10422,10 +10457,10 @@ function fpShellHTML() {
   <div id="fp-sidebar" style="width:250px;min-width:200px;border-right:1px solid var(--border);display:flex;flex-direction:column;background:var(--bg1);flex-shrink:0">
     <div style="padding:10px 12px;border-bottom:1px solid var(--border)">
       <div style="font-size:10px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-bottom:6px">Flow Path</div>
-      <div id="fp-mode-pills" style="display:flex;gap:3px;margin-bottom:6px">
-        <button class="fl-fbtn${fpState.mode==='domain'?' active':''}" data-m="domain" onclick="fpSetMode('domain',this)">Domain</button>
-        <button class="fl-fbtn${fpState.mode==='app'   ?' active':''}" data-m="app"    onclick="fpSetMode('app',this)">Application</button>
-        <button class="fl-fbtn${fpState.mode==='npa'   ?' active':''}" data-m="npa"    onclick="fpSetMode('npa',this)">NPA</button>
+      <div id="fp-mode-pills" style="display:flex;gap:5px;margin-bottom:8px">
+        <button class="fp-mode-btn${fpState.mode==='domain'?' active':''}" data-m="domain" onclick="fpSetMode('domain',this)"><span class="fp-mode-icon">🌐</span>Domain</button>
+        <button class="fp-mode-btn${fpState.mode==='app'   ?' active':''}" data-m="app"    onclick="fpSetMode('app',this)"><span class="fp-mode-icon">🖥️</span>App</button>
+        <button class="fp-mode-btn${fpState.mode==='npa'   ?' active':''}" data-m="npa"    onclick="fpSetMode('npa',this)"><span class="fp-mode-icon">🔒</span>NPA</button>
       </div>
       <input id="fp-search" class="search-box" placeholder="Search domain or IP…" oninput="fpFilterGroups(this.value)"
         style="width:100%;box-sizing:border-box;font-size:11px;margin-bottom:6px">
@@ -10491,7 +10526,7 @@ function fpSetMode(mode, btn) {
   fpState.searchQuery = '';
   fpState.showFilter = 'all';
   fpState.selectedIdx = 0;
-  document.querySelectorAll('#fp-mode-pills .fl-fbtn').forEach(b => b.classList.toggle('active', b.dataset.m === mode));
+  document.querySelectorAll('#fp-mode-pills .fp-mode-btn').forEach(b => b.classList.toggle('active', b.dataset.m === mode));
   document.querySelectorAll('#fp-sidebar .fl-fbtn[data-f]').forEach(b => b.classList.toggle('active', b.dataset.f === 'all'));
   const si = document.getElementById('fp-search'); if (si) si.value = '';
   fpState.groups = fpBuildGroupsForMode();
