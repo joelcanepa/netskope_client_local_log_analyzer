@@ -499,6 +499,20 @@ body {
 .finding-card.severity-info    { border-left-color: var(--primary); }
 .finding-card.reviewed         { opacity: 0.38; }
 
+/* ── Bundle Health strip ── */
+.bh-strip { font-size:11px; margin-bottom:10px; }
+.bh-strip summary { cursor:pointer; list-style:none; display:flex; align-items:center; gap:6px; padding:6px 10px; border-radius:6px; user-select:none; background:var(--bg2); border:1px solid var(--border); }
+.bh-strip summary::-webkit-details-marker { display:none; }
+.bh-strip.bh-ok   summary { color:var(--muted); }
+.bh-strip.bh-warn summary { color:#f0883e; font-weight:600; border-color:rgba(240,136,62,.3); background:rgba(240,136,62,.06); }
+.bh-strip.bh-critical summary { color:#f85149; font-weight:600; border-color:rgba(248,81,73,.3); background:rgba(248,81,73,.06); }
+.bh-body { padding:10px 12px; display:flex; flex-direction:column; gap:10px; border:1px solid var(--border); border-top:none; border-radius:0 0 6px 6px; background:var(--bg2); }
+.bh-pill-row { display:flex; flex-wrap:wrap; gap:4px; margin-top:4px; }
+.bh-pill { font-size:10px; padding:1px 7px; border-radius:3px; font-family:monospace; white-space:nowrap; }
+.bh-pill-ok   { background:rgba(63,185,80,.08); color:#3fb950; }
+.bh-pill-miss { background:rgba(240,136,62,.12); color:#f0883e; cursor:help; }
+.bh-pill-crit { background:rgba(248,81,73,.12); color:#f85149; cursor:help; }
+
 /* Card header row */
 .fc-header {
   display: flex; align-items: center; justify-content: space-between;
@@ -4711,6 +4725,67 @@ function detectFindings() {
 let _findingsCat = new Set();
 let _findingsSev = new Set();
 
+function buildBundleHealth() {
+  const TRACKED = [
+    { f: null,                          label: 'nsdebuglog',    tier: 'core',     cap: 'log analysis & most findings',           check: () => !!(state.files['nsdebuglog.log'] || state.files['nsDiag.log'] || state.files['nsAppUI.log']) },
+    { f: 'nsconfig.json',               label: 'nsconfig',      tier: 'core',     cap: 'client config & proxy findings' },
+    { f: null,                          label: 'npadebug',      tier: 'key',      cap: 'NPA findings & pre-logon analysis',       check: () => !!(state.files['npadebuglog.log'] || state.files['npadebuglog.1.log']) },
+    { f: 'SystemInfo.log',              label: 'SystemInfo',    tier: 'key',      cap: 'device identity & system info' },
+    { f: 'nssteering.json',             label: 'nssteering',    tier: 'key',      cap: 'steering panel & dynamic steering' },
+    { f: 'nsuser.conf',                 label: 'nsuser',        tier: 'key',      cap: 'tunnel, NPA & classification status' },
+    { f: 'nsbypass.json',               label: 'nsbypass',      tier: 'extended', cap: 'bypass & NPA exceptions panel' },
+    { f: 'nsdeviceid.json',             label: 'nsdeviceid',    tier: 'extended', cap: 'device classification rules' },
+    { f: 'dem.json',                    label: 'dem',           tier: 'extended', cap: 'DEM panel & findings' },
+    { f: 'nsuserconfig.json',           label: 'nsuserconfig',  tier: 'extended', cap: 'pre-auth user, auto-update' },
+    { f: 'network-state.log',           label: 'network-state', tier: 'extended', cap: 'network interfaces & routing' },
+    { f: 'appInfo.log',                 label: 'appInfo',       tier: 'extended', cap: 'applications & VPN conflict detection' },
+    { f: 'eventcache.json',             label: 'eventcache',    tier: 'extended', cap: 'on-prem detection details' },
+    { f: 'nsbwanconfig.json',           label: 'nsbwanconfig',  tier: 'extended', cap: 'SD-WAN configuration' },
+    { f: 'ai_discovery_gef_debug.json', label: 'ai_discovery',  tier: 'extended', cap: 'AI process discovery' },
+  ];
+
+  const rows = TRACKED.map(t => ({ ...t, present: t.check ? t.check() : !!state.files[t.f] }));
+  const present     = rows.filter(r => r.present);
+  const absent      = rows.filter(r => !r.present);
+  const coreAbsent  = absent.filter(r => r.tier === 'core');
+  const keyAbsent   = absent.filter(r => r.tier === 'key');
+
+  const cls  = coreAbsent.length ? 'bh-critical' : keyAbsent.length ? 'bh-warn' : 'bh-ok';
+  const icon = coreAbsent.length ? '🔴' : keyAbsent.length ? '⚠️' : '📦';
+
+  const summaryText = absent.length === 0
+    ? `Bundle complete · ${present.length}/${TRACKED.length} files loaded`
+    : coreAbsent.length
+    ? `Core files missing: ${coreAbsent.map(r => r.label).join(', ')} — findings may be incomplete`
+    : keyAbsent.length
+    ? `${absent.length} files absent: ${keyAbsent.map(r => r.label).join(', ')} — some panels limited`
+    : `${absent.length} optional files absent · ${present.length}/${TRACKED.length} loaded`;
+
+  const presentPills = present.map(r =>
+    `<span class="bh-pill bh-pill-ok" title="${esc(r.cap)}">${esc(r.label)}</span>`
+  ).join('');
+  const absentPills = absent.map(r => {
+    const pc = r.tier === 'core' ? 'bh-pill-crit' : 'bh-pill-miss';
+    return `<span class="bh-pill ${pc}" title="Affects: ${esc(r.cap)}">${esc(r.label)}</span>`;
+  }).join('');
+
+  const defaultOpen = coreAbsent.length > 0 || keyAbsent.length > 0;
+
+  return `<details class="bh-strip ${cls}"${defaultOpen ? ' open' : ''}>
+    <summary>${icon} ${esc(summaryText)} <span style="opacity:.4;font-size:9px;margin-left:2px">▾</span></summary>
+    <div class="bh-body">
+      <div>
+        <span style="font-size:10px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em">Present (${present.length})</span>
+        <div class="bh-pill-row">${presentPills || '<span style="color:var(--muted);font-size:10px">none</span>'}</div>
+      </div>
+      ${absent.length ? `<div>
+        <span style="font-size:10px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em">Absent (${absent.length}) — hover for affected capability</span>
+        <div class="bh-pill-row">${absentPills}</div>
+      </div>` : ''}
+    </div>
+  </details>`;
+}
+
 function renderFindings() {
   _findingsCat = new Set();
   _findingsSev = new Set();
@@ -4724,8 +4799,11 @@ function renderFindings() {
   const el = document.getElementById('findings-content');
   if (!el) return;
 
+  const healthHtml = buildBundleHealth();
+
   if (detected.length === 0) {
-    el.innerHTML = '<div style="text-align:center;padding:80px;color:var(--muted)">✅ No findings detected</div>';
+    el.innerHTML = `<div style="max-width:640px;margin:24px auto 0">${healthHtml}</div>
+      <div style="text-align:center;padding:60px;color:var(--muted)">✅ No findings detected</div>`;
     return;
   }
 
@@ -4755,6 +4833,7 @@ function renderFindings() {
   }).join('');
 
   el.innerHTML = `
+    <div style="margin-bottom:10px">${healthHtml}</div>
     <div style="display:flex;flex-direction:column;gap:0;
       position:sticky;top:-16px;z-index:20;
       margin:-16px -16px 14px;padding:16px 16px 12px;
