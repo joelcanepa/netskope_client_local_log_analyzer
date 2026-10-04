@@ -20,6 +20,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
 <style>
 :root {
   --bg:       #0d1117;
+  --bg1:      #111318;
   --bg2:      #161b22;
   --bg3:      #1c2128;
   --border:   #30363d;
@@ -1188,7 +1189,7 @@ body {
 
 <script>
 // ─── Version ─────────────────────────────────────────────────────────────────
-const TOOL_VERSION = '1.16.3';
+const TOOL_VERSION = '1.16.4';
 
 // ─── State ────────────────────────────────────────────────────────────────────
 const state = {
@@ -4716,9 +4717,10 @@ function renderFindings() {
 
   el.innerHTML = `
     <div style="display:flex;flex-direction:column;gap:8px;
-      position:sticky;top:-16px;z-index:10;
+      position:sticky;top:-16px;z-index:20;
       margin:-16px -16px 14px;padding:16px 16px 12px;
-      background:var(--bg1);border-bottom:1px solid var(--border)">
+      background:var(--bg1);border-bottom:1px solid var(--border);
+      box-shadow:0 4px 12px rgba(0,0,0,0.5)">
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <div style="display:flex;align-items:center;gap:8px;flex:1;flex-wrap:wrap">
           ${sevSummary}
