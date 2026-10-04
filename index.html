@@ -1171,7 +1171,7 @@ body {
 
 <script>
 // ─── Version ─────────────────────────────────────────────────────────────────
-const TOOL_VERSION = '1.15.7';
+const TOOL_VERSION = '1.15.8';
 
 // ─── State ────────────────────────────────────────────────────────────────────
 const state = {
@@ -6553,63 +6553,63 @@ const TL_SEV = {
 // Each pattern: { id, cat, sev, label, test(row), detail?(row)→string|null }
 const TL_PATTERNS = [
   // Client lifecycle
-  { id:'svc-start',       cat:'client',  sev:'good', label:'Client service started',
+  { id:'svc-start',       cat:'client',  sev:'good', label:'Service started',
     test: r => /stAgentSvc.*start|Agent.*service.*start|NSClient.*start|nsclient.*init/i.test(r.msg) },
-  { id:'svc-stop',        cat:'client',  sev:'bad',  label:'Client service stopped',
+  { id:'svc-stop',        cat:'client',  sev:'bad',  label:'Service stopped',
     test: r => /stAgentSvc.*stop|Agent.*service.*stop|NSClient.*stop|service.*shutting/i.test(r.msg) },
-  { id:'admin-disable',   cat:'client',  sev:'bad',  label:'Client disabled by admin',
+  { id:'admin-disable',   cat:'client',  sev:'bad',  label:'Admin disabled',
     test: r => /NSTUNNEL_DISCONNECTED_BYADMIN|"event".*"Admin Disabled"|Admin Dis(?:able|abled)|clientStatusV2['":\s]+0/i.test(r.msg) },
-  { id:'admin-enable',    cat:'client',  sev:'good', label:'Client re-enabled',
+  { id:'admin-enable',    cat:'client',  sev:'good', label:'Re-enabled',
     test: r => /clientStatusV2['":\s]+1|Admin.*Enabl|client.*re.?enabl/i.test(r.msg) },
-  { id:'failclose-on',    cat:'client',  sev:'bad',  label:'FailClose activated',
+  { id:'failclose-on',    cat:'client',  sev:'bad',  label:'FailClose on',
     test: r => /FailClose.*activat|fail.close.*activat|FailClose.*enabl/i.test(r.msg) },
-  { id:'failclose-off',   cat:'client',  sev:'good', label:'FailClose deactivated',
+  { id:'failclose-off',   cat:'client',  sev:'good', label:'FailClose off',
     test: r => /FailClose.*deactivat|fail.close.*deactivat|FailClose.*disabl/i.test(r.msg) },
-  { id:'captive',         cat:'client',  sev:'warn', label:'Captive portal detected',
+  { id:'captive',         cat:'client',  sev:'warn', label:'Captive portal',
     test: r => /captive.*portal.*detect|CaptivePortal.*true|captive.*portal.*active/i.test(r.msg) },
   // SWG tunnel
-  { id:'tunnel-up',       cat:'tunnel',  sev:'good', label:'SWG tunnel connected',
+  { id:'tunnel-up',       cat:'tunnel',  sev:'good', label:'Connected',
     test: r => /tunnel.*connection.*established|connected to.*gateway|nscon.*connect(?:ed)?|Tunnel.*UP/i.test(r.msg),
     detail: r => { const m = r.msg.match(/(\d{1,3}(?:\.\d{1,3}){3})/); return m ? m[1] : null; } },
-  { id:'tunnel-down',     cat:'tunnel',  sev:'bad',  label:'SWG tunnel disconnected',
+  { id:'tunnel-down',     cat:'tunnel',  sev:'bad',  label:'Disconnected',
     test: r => /tunnel.*disconnect(?:ed)?|NSTUNNEL_DISCONNECT|nscon.*disconnect/i.test(r.msg),
     detail: r => { const m = r.msg.match(/reason[:\s]+([^\n,]{3,50})/i); return m ? m[1].trim() : null; } },
-  { id:'dtls-up',         cat:'tunnel',  sev:'info', label:'Tunnel protocol: DTLS',
+  { id:'dtls-up',         cat:'tunnel',  sev:'info', label:'Protocol: DTLS',
     test: r => /DTLS.*established|Using DTLS|tunnel.*proto.*DTLS/i.test(r.msg) },
-  { id:'dtls-fallback',   cat:'tunnel',  sev:'warn', label:'Tunnel fell back to TLS',
+  { id:'dtls-fallback',   cat:'tunnel',  sev:'warn', label:'Fell back to TLS',
     test: r => /fallback.*TLS|Falling.*back.*TLS|DTLS.*fail.*TLS/i.test(r.msg) },
   // GSLB
-  { id:'gslb-pop',        cat:'tunnel',  sev:'info', label:'GSLB PoP selected',
+  { id:'gslb-pop',        cat:'tunnel',  sev:'info', label:'PoP selected',
     test: r => /GSLB.*select|PoP.*select|selected.*PoP|gateway.*select|selected.*gateway/i.test(r.msg),
     detail: r => { const m = r.msg.match(/([A-Z]{2,6}[0-9]{2})/); return m ? m[1] : null; } },
   // NPA
-  { id:'npa-up',          cat:'npa',     sev:'good', label:'NPA tunnel connected',
+  { id:'npa-up',          cat:'npa',     sev:'good', label:'Connected',
     test: r => /NPA Tunnel is connected|NPA.*tunnel.*up|NPA.*tunnel.*established/i.test(r.msg) },
-  { id:'npa-down',        cat:'npa',     sev:'bad',  label:'NPA tunnel disconnected',
+  { id:'npa-down',        cat:'npa',     sev:'bad',  label:'Disconnected',
     test: r => /NPA Tunnel is disconnected|NPA.*tunnel.*down|NPA.*tunnel.*disconnect/i.test(r.msg) },
-  { id:'prelogon-up',     cat:'npa',     sev:'good', label:'Pre-logon tunnel connected',
+  { id:'prelogon-up',     cat:'npa',     sev:'good', label:'Pre-logon up',
     test: r => /prelogon.*tunnel.*connect|pre.logon.*established/i.test(r.msg) },
-  { id:'prelogon-down',   cat:'npa',     sev:'warn', label:'Pre-logon tunnel disconnected',
+  { id:'prelogon-down',   cat:'npa',     sev:'warn', label:'Pre-logon down',
     test: r => /prelogon.*tunnel.*disconnect|pre.logon.*disconnect/i.test(r.msg) },
   // Network / location
-  { id:'on-prem',         cat:'network', sev:'info', label:'On-prem detected',
+  { id:'on-prem',         cat:'network', sev:'info', label:'On-prem',
     test: r => /on.?prem.*detect|detect.*on.?prem|onprem.*true|entered.*on.prem/i.test(r.msg) },
-  { id:'off-prem',        cat:'network', sev:'info', label:'Off-prem detected',
+  { id:'off-prem',        cat:'network', sev:'info', label:'Off-prem',
     test: r => /off.?prem.*detect|onprem.*false|entered.*off.prem|leaving.*on.prem/i.test(r.msg) },
-  { id:'net-change',      cat:'network', sev:'info', label:'Network interface changed',
+  { id:'net-change',      cat:'network', sev:'info', label:'Interface changed',
     test: r => /network.*interface.*change|IP.*address.*change|default.*gateway.*change/i.test(r.msg) },
   // SD-WAN
-  { id:'bwan-up',         cat:'bwan',    sev:'good', label:'SD-WAN tunnel connected',
+  { id:'bwan-up',         cat:'bwan',    sev:'good', label:'Connected',
     test: r => /[Bb][Ww][Aa][Nn].*connect|BWanSvc.*connect|bwanclient.*connect/i.test(r.msg),
     detail: r => { const m = r.msg.match(/hub[:\s"]+([^\s",\n]{4,})/i); return m ? m[1] : null; } },
-  { id:'bwan-down',       cat:'bwan',    sev:'bad',  label:'SD-WAN tunnel disconnected',
+  { id:'bwan-down',       cat:'bwan',    sev:'bad',  label:'Disconnected',
     test: r => /[Bb][Ww][Aa][Nn].*disconnect|BWanSvc.*disconnect|BWAN.*tunnel.*down/i.test(r.msg) },
-  { id:'bwan-onprem',     cat:'bwan',    sev:'info', label:'SD-WAN paused (on-prem)',
+  { id:'bwan-onprem',     cat:'bwan',    sev:'info', label:'Paused (on-prem)',
     test: r => /bwan.*on.?prem.*stop|BWAN.*onprem.*stop|tunnel.*manager.*stop.*onprem/i.test(r.msg) },
   // Config
-  { id:'config-dl',       cat:'config',  sev:'info', label:'Config downloaded from tenant',
+  { id:'config-dl',       cat:'config',  sev:'info', label:'Config downloaded',
     test: r => /config.*downloaded|Policy is up to date|tenant.*config.*receiv|policy.*download.*success/i.test(r.msg) },
-  { id:'steering-refresh',cat:'config',  sev:'info', label:'Steering config refreshed',
+  { id:'steering-refresh',cat:'config',  sev:'info', label:'Steering refresh',
     test: r => /steering.*config.*appli|steering.*config.*update|new.*steering.*config/i.test(r.msg) },
 ];
 
