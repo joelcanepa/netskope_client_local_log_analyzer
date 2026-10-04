@@ -1171,7 +1171,7 @@ body {
 
 <script>
 // ─── Version ─────────────────────────────────────────────────────────────────
-const TOOL_VERSION = '1.15.1';
+const TOOL_VERSION = '1.15.2';
 
 // ─── State ────────────────────────────────────────────────────────────────────
 const state = {
@@ -6650,39 +6650,39 @@ function renderTimeline() {
     return;
   }
 
-  // All events (category filter dims lanes, doesn't hide them)
   const allEvents = tlBuildEvents('all', _tlQ);
   _tlEvArr = allEvents;
 
-  // Build per-category buckets, preserving global index
   const cats = Object.keys(TL_CAT);
   const bycat = {};
   cats.forEach(k => bycat[k] = []);
   allEvents.forEach((ev, i) => { if (bycat[ev.cat]) bycat[ev.cat].push({ ev, i }); });
 
-  // Time range — pad 4% each side so nodes on the edge aren't clipped
+  // Time range
   let minMs = Infinity, maxMs = -Infinity;
   for (const ev of allEvents) { if (ev.ms < minMs) minMs = ev.ms; if (ev.ms > maxMs) maxMs = ev.ms; }
-  const hasData = allEvents.length > 0;
-  if (!hasData) { minMs = Date.now() - 3600000; maxMs = Date.now(); }
+  if (!allEvents.length) { minMs = Date.now() - 3600000; maxMs = Date.now(); }
   const rawSpan = maxMs - minMs || 3600000;
-  const pad = rawSpan * 0.04;
+  const pad = rawSpan * 0.05;
   minMs -= pad; maxMs += pad;
   const span = maxMs - minMs;
 
   // Layout
   const W = Math.max(600, el.clientWidth || 900);
-  const LW = 84;   // lane label column width
-  const MR = 18;
+  const LW = 92;
+  const MR = 20;
   const CW = W - LW - MR;
-  const LANE_H = 60;
-  const MT = 14;
-  const AXIS_H = 26;
+  const LANE_H = 80;
+  const MT = 16;
+  const AXIS_H = 30;
   const SVG_H = MT + cats.length * LANE_H + AXIS_H + 4;
+
+  // Chip geometry
+  const CHIP_H = 26, CHIP_R = 13, CH_PAD = 10, CHAR_W = 6.3, ICON_W = 15, MAX_LBL = 20;
 
   const tsToX = ms => LW + ((ms - minMs) / span) * CW;
 
-  // Time-axis ticks
+  // Tick density
   const spanMin = span / 60000;
   const tickMin = spanMin <= 5 ? 0.5 : spanMin <= 30 ? 2 : spanMin <= 120 ? 10
     : spanMin <= 480 ? 30 : spanMin <= 1440 ? 60 : 240;
@@ -6695,14 +6695,14 @@ function renderTimeline() {
     const h = String(d.getUTCHours()).padStart(2,'0');
     const m = String(d.getUTCMinutes()).padStart(2,'0');
     if (tickMin >= 1440) return `${d.getUTCMonth()+1}/${d.getUTCDate()}`;
-    if (tickMin >= 60) return `${h}:00`;
+    if (tickMin >= 60)   return `${h}:00`;
     return `${h}:${m}`;
   };
 
   const AXIS_Y = MT + cats.length * LANE_H;
   const SEV_FILL = { good:'#3fb950', bad:'#f85149', warn:'#d29922', info:'#58a6ff', muted:'#6e7681' };
+  const SEV_ICON = { good:'✅', bad:'🔴', warn:'⚠️', info:'🔵', muted:'⚪' };
 
-  // Build SVG pieces
   let lanesSvg = '';
 
   cats.forEach((cat, li) => {
@@ -6710,60 +6710,76 @@ function renderTimeline() {
     const meta = TL_CAT[cat];
     const evs = bycat[cat];
     const dimmed = _tlCat !== 'all' && _tlCat !== cat;
-    const bgAlpha = li % 2 === 0 ? '08' : '04';
+    const op = dimmed ? 0.2 : 1;
 
-    // Lane background stripe
-    lanesSvg += `<rect x="0" y="${MT + li*LANE_H}" width="${W}" height="${LANE_H}" fill="${meta.color}${bgAlpha}"/>`;
+    // Lane background
+    lanesSvg += `<rect x="0" y="${MT + li*LANE_H}" width="${W}" height="${LANE_H}" fill="${meta.color}${li%2===0?'0b':'06'}"/>`;
+    // Separator
+    lanesSvg += `<line x1="0" y1="${MT+(li+1)*LANE_H}" x2="${W}" y2="${MT+(li+1)*LANE_H}" stroke="var(--border)" stroke-width="0.5"/>`;
 
-    // Lane separator
-    lanesSvg += `<line x1="0" y1="${MT + (li+1)*LANE_H}" x2="${W}" y2="${MT + (li+1)*LANE_H}" stroke="var(--border)" stroke-width="0.5"/>`;
+    // Label + event count sub-label
+    const nc = _tlCat === cat ? 'all' : cat;
+    lanesSvg += `<text x="${LW-10}" y="${cy - 5}" font-size="12" font-weight="700" fill="${dimmed?'var(--muted)':meta.color}" text-anchor="end" style="cursor:pointer;user-select:none" onclick="tlSetCat('${nc}')">${meta.label}</text>`;
+    lanesSvg += `<text x="${LW-10}" y="${cy + 9}" font-size="9" fill="${dimmed?'var(--muted)':meta.color}" text-anchor="end" opacity="${dimmed?0.3:0.55}">${evs.length ? evs.length+' event'+(evs.length>1?'s':'') : '—'}</text>`;
 
-    // Label (clickable — toggle focus on this lane)
-    const labelColor = dimmed ? 'var(--muted)' : meta.color;
-    const nextCat = _tlCat === cat ? 'all' : cat;
-    lanesSvg += `<text x="${LW - 10}" y="${cy + 4}" font-size="11" font-weight="600" fill="${labelColor}" text-anchor="end" style="cursor:pointer;user-select:none" onclick="tlSetCat('${nextCat}')">${meta.label}</text>`;
+    // Baseline through lane
+    lanesSvg += `<line x1="${LW}" y1="${cy}" x2="${W-MR}" y2="${cy}" stroke="${meta.color}" stroke-width="0.8" opacity="${dimmed?0.08:0.18}"/>`;
 
-    // Connector spine — thin dashed line from first to last event in this lane
-    if (evs.length >= 2) {
-      const x1 = tsToX(evs[0].ev.ms).toFixed(1);
-      const x2 = tsToX(evs[evs.length-1].ev.ms).toFixed(1);
-      lanesSvg += `<line x1="${x1}" y1="${cy}" x2="${x2}" y2="${cy}" stroke="${meta.color}" stroke-width="1.5" stroke-dasharray="5 3" opacity="${dimmed ? 0.18 : 0.45}"/>`;
-    }
+    // Empty lane hint
+    if (!evs.length && !dimmed)
+      lanesSvg += `<text x="${LW+14}" y="${cy+4}" font-size="10" fill="var(--muted)" opacity="0.3" font-style="italic">no events detected</text>`;
 
-    // No-events hint
-    if (evs.length === 0 && !dimmed) {
-      lanesSvg += `<text x="${LW + 12}" y="${cy + 4}" font-size="10" fill="var(--muted)" opacity="0.4">no events detected</text>`;
-    }
+    // Pre-compute chip widths and detect overlaps
+    const chips = evs.map(({ ev, i }) => {
+      const lbl = ev.label.length > MAX_LBL ? ev.label.slice(0, MAX_LBL-1)+'…' : ev.label;
+      const cW = Math.min(190, lbl.length * CHAR_W + ICON_W + CH_PAD * 2);
+      return { ev, i, lbl, cW, x: tsToX(ev.ms) };
+    });
 
-    // Event nodes
-    evs.forEach(({ ev, i }) => {
-      const x = tsToX(ev.ms).toFixed(1);
-      const fill = SEV_FILL[ev.sev] || '#8b949e';
-      const op = dimmed ? 0.2 : 1;
-      // outer glow ring
-      lanesSvg += `<circle cx="${x}" cy="${cy}" r="10" fill="${fill}" opacity="${dimmed ? 0 : 0.12}"/>`;
-      // node
-      lanesSvg += `<circle cx="${x}" cy="${cy}" r="6" fill="${fill}" stroke="var(--bg)" stroke-width="2" opacity="${op}" style="cursor:pointer" onmouseover="tlTipShow(event,${i})" onmouseout="tlTipHide()" onclick="tlTipPin(event,${i})"/>`;
+    // Overlap pass — if chip left edge would collide with previous chip's right, fall back to dot
+    let prevRight = -Infinity;
+    chips.forEach(c => {
+      const left = c.x - c.cW / 2;
+      c.dot = left < prevRight + 5;
+      if (!c.dot) prevRight = c.x + c.cW / 2;
+    });
+
+    chips.forEach(c => {
+      const fill = SEV_FILL[c.ev.sev] || '#8b949e';
+      const xf = c.x.toFixed(1);
+      if (c.dot) {
+        // Compact dot fallback for crowded events
+        lanesSvg += `<circle cx="${xf}" cy="${cy}" r="5" fill="${fill}" stroke="var(--bg)" stroke-width="1.5" opacity="${op}" style="cursor:pointer" onmouseover="tlTipShow(event,${c.i})" onmouseout="tlTipHide()" onclick="tlTipPin(event,${c.i})"/>`;
+      } else {
+        // Full labeled chip
+        const rx = (c.x - c.cW/2).toFixed(1);
+        const ry = (cy - CHIP_H/2).toFixed(1);
+        const icon = SEV_ICON[c.ev.sev] || '⚪';
+        const tx = (c.x - c.cW/2 + CH_PAD).toFixed(1);
+        lanesSvg += `<g style="cursor:pointer" onmouseover="tlTipShow(event,${c.i})" onmouseout="tlTipHide()" onclick="tlTipPin(event,${c.i})">
+          <rect x="${rx}" y="${ry}" width="${c.cW.toFixed(1)}" height="${CHIP_H}" rx="${CHIP_R}" fill="${fill}1e" stroke="${fill}" stroke-width="1.3" opacity="${op}"/>
+          <text x="${tx}" y="${(cy+4).toFixed(1)}" font-size="11" fill="${dimmed?'var(--muted)':fill}" opacity="${op}">${icon} ${c.lbl}</text>
+        </g>`;
+      }
     });
   });
 
-  // Vertical grid lines through all lanes
+  // Vertical grid lines
   let gridSvg = '';
   for (const t of ticks) {
     const x = tsToX(t).toFixed(1);
-    gridSvg += `<line x1="${x}" y1="${MT}" x2="${x}" y2="${AXIS_Y}" stroke="var(--border)" stroke-width="0.5" stroke-dasharray="2 5" opacity="0.5"/>`;
+    gridSvg += `<line x1="${x}" y1="${MT}" x2="${x}" y2="${AXIS_Y}" stroke="var(--border)" stroke-width="0.5" stroke-dasharray="2 5" opacity="0.4"/>`;
   }
 
   // Time axis
-  let axisSvg = `<line x1="${LW}" y1="${AXIS_Y}" x2="${W - MR}" y2="${AXIS_Y}" stroke="var(--border)" stroke-width="1"/>`;
+  let axisSvg = `<line x1="${LW}" y1="${AXIS_Y}" x2="${W-MR}" y2="${AXIS_Y}" stroke="var(--border)" stroke-width="1"/>`;
   for (const t of ticks) {
     const x = tsToX(t).toFixed(1);
-    axisSvg += `<line x1="${x}" y1="${AXIS_Y}" x2="${x}" y2="${AXIS_Y + 4}" stroke="var(--muted)" stroke-width="1"/>
-      <text x="${x}" y="${AXIS_Y + 16}" font-size="9" text-anchor="middle" fill="var(--muted)">${fmtTick(t)}</text>`;
+    axisSvg += `<line x1="${x}" y1="${AXIS_Y}" x2="${x}" y2="${AXIS_Y+4}" stroke="var(--muted)" stroke-width="1"/>
+      <text x="${x}" y="${AXIS_Y+17}" font-size="10" text-anchor="middle" fill="var(--muted)">${fmtTick(t)}</text>`;
   }
 
-  // Label column divider
-  const divSvg = `<line x1="${LW}" y1="${MT}" x2="${LW}" y2="${AXIS_Y}" stroke="var(--border)" stroke-width="1" opacity="0.6"/>`;
+  const divSvg = `<line x1="${LW}" y1="${MT}" x2="${LW}" y2="${AXIS_Y}" stroke="var(--border)" stroke-width="1" opacity="0.5"/>`;
 
   const totalEvts = allEvents.length;
   el.innerHTML = `
