@@ -1171,7 +1171,7 @@ body {
 
 <script>
 // ─── Version ─────────────────────────────────────────────────────────────────
-const TOOL_VERSION = '1.16.0';
+const TOOL_VERSION = '1.16.1';
 
 // ─── State ────────────────────────────────────────────────────────────────────
 const state = {
@@ -6704,6 +6704,7 @@ function renderTimeline() {
   let dataMin = Infinity, dataMax = -Infinity;
   for (const ev of allEvents) { if (ev.ms < dataMin) dataMin = ev.ms; if (ev.ms > dataMax) dataMax = ev.ms; }
   if (!allEvents.length) { dataMin = Date.now() - 3600000; dataMax = Date.now(); }
+  _tlSessionStart = dataMin;
   const rawSpan = dataMax - dataMin || 3600000;
   const fullPad = rawSpan * 0.05;
   const fullMin = dataMin - fullPad, fullMax = dataMax + fullPad;
@@ -6890,7 +6891,8 @@ function renderTimeline() {
 }
 
 
-let _tlZoom   = null; // { startMs, endMs } | null
+let _tlZoom        = null; // { startMs, endMs } | null
+let _tlSessionStart = 0;  // earliest log timestamp — used for T+ relative display
 let _tlBrush  = { down: false, startX: 0, dragging: false };
 let _tlLayout = null; // layout params set by renderTimeline for brush handlers
 
@@ -6984,6 +6986,11 @@ function _tlRenderTip(cx, cy, idx) {
     const d = new Date(ms);
     return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`;
   };
+  const fmtRel = ms => {
+    const d = Math.max(0, ms - _tlSessionStart);
+    const h = Math.floor(d / 3600000), m = Math.floor((d % 3600000) / 60000), s = Math.floor((d % 60000) / 1000);
+    return h > 0 ? `T+${h}h ${m}m` : m > 0 ? `T+${m}m ${s}s` : `T+${s}s`;
+  };
 
   const catEvs = _tlEvArr.filter(e => e.cat === ev.cat).sort((a, b) => a.ms - b.ms);
   const total = catEvs.length;
@@ -7033,13 +7040,16 @@ function _tlRenderTip(cx, cy, idx) {
       <div>
         <div style="font-size:13px;font-weight:600;color:${fill};line-height:1.2">${ev.label}</div>
         ${ev.detail ? `<div style="font-size:11px;color:var(--muted);margin-top:2px;line-height:1.3">${ev.detail}</div>` : ''}
-        <div style="font-family:var(--font-mono,monospace);font-size:11.5px;color:var(--muted);margin-top:5px">${fmtTime(ev.ms)}</div>
+        <div style="display:flex;align-items:baseline;gap:8px;margin-top:5px">
+          <span style="font-family:var(--font-mono,monospace);font-size:11.5px;color:var(--muted)">${fmtTime(ev.ms)}</span>
+          <span style="font-family:var(--font-mono,monospace);font-size:10px;color:${cat.color};opacity:0.75">${fmtRel(ev.ms)}</span>
+        </div>
       </div>
     </div>
     <div style="background:var(--bg1);border-radius:7px;padding:8px 8px 5px;margin-bottom:8px">
       <svg viewBox="0 0 ${TW} ${TH}" width="100%" height="${TH}" style="display:block;overflow:visible">${connLine}${dots}</svg>
       <div style="display:flex;justify-content:space-between;font-family:var(--font-mono,monospace);font-size:9px;color:var(--muted);margin-top:3px;padding:0 2px">
-        <span>${fmtTime(tMin)}</span>${total>1?`<span>${fmtTime(tMax)}</span>`:''}
+        <span title="${fmtTime(tMin)}">${fmtRel(tMin)}</span>${total>1?`<span title="${fmtTime(tMax)}">${fmtRel(tMax)}</span>`:''}
       </div>
     </div>
     <div style="display:flex;align-items:center;justify-content:space-between;font-size:10.5px;color:var(--muted)">
@@ -7078,6 +7088,11 @@ function tlLaneTipShow(e, catKey) {
     const d = new Date(ms);
     return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
   };
+  const fmtRel = ms => {
+    const d = Math.max(0, ms - _tlSessionStart);
+    const h = Math.floor(d / 3600000), m = Math.floor((d % 3600000) / 60000), s = Math.floor((d % 60000) / 1000);
+    return h > 0 ? `T+${h}h ${m}m` : m > 0 ? `T+${m}m ${s}s` : `T+${s}s`;
+  };
   const fmtDur = ms => {
     const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000), s = Math.floor((ms % 60000) / 1000);
     if (h > 0) return `${h}h ${m}m`; if (m > 0) return `${m}m ${s}s`; return `${s}s`;
@@ -7114,7 +7129,7 @@ function tlLaneTipShow(e, catKey) {
     <div style="background:var(--bg1);border-radius:6px;padding:8px 8px 5px;margin-bottom:10px">
       <svg viewBox="0 0 ${TW} ${TH}" width="100%" height="${TH}" style="display:block;overflow:visible">${connLine}${dots}</svg>
       <div style="display:flex;justify-content:space-between;font-family:var(--font-mono,monospace);font-size:9px;color:var(--muted);margin-top:3px">
-        <span>${fmtTime(tMin)}</span>${total>1?`<span>${fmtTime(tMax)}</span>`:''}
+        <span title="${fmtTime(tMin)}">${fmtRel(tMin)}</span>${total>1?`<span title="${fmtTime(tMax)}">${fmtRel(tMax)}</span>`:''}
       </div>
     </div>
     <div style="font-size:11px;margin-bottom:10px">${sevRow}</div>
