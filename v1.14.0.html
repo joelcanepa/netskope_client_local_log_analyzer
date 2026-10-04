@@ -9801,7 +9801,255 @@ function buildSeverityChartSVG(allLogs) {
   </div>`;
 }
 
+function renderAiDiscovery() {
+  const container = document.getElementById('aidiscovery-content');
+  if (!container) return;
+
+  if (!state.aiDiscovery) {
+    container.innerHTML = `<div style="padding:60px 20px;text-align:center;color:var(--muted)">
+      <div style="font-size:52px;margin-bottom:14px;opacity:.5">🤖</div>
+      <div style="font-size:15px;font-weight:600;margin-bottom:8px;color:var(--text)">No AI Discovery data</div>
+      <div style="font-size:12px;line-height:1.7">Upload a log bundle containing <code style="font-family:monospace;background:var(--bg3);padding:1px 5px;border-radius:3px">ai_discovery_gef_debug.json</code> to see results.<br>Present in R141+ bundles when AI Discovery is enabled.</div>
+    </div>`;
+    return;
+  }
+
+  const aid = state.aiDiscovery;
+  const agents      = aid.ai_agents          || [];
+  const browserExts = aid.browser_extensions || [];
+  const editorExts  = aid.editor_extensions  || [];
+  const llmServers  = aid.llm_servers        || [];
+  const sigVer      = aid.ai_signature_version || '0';
+
+  // Per-type color + label
+  const SID_META = {
+    '10000001': { color: '#58a6ff', label: 'MCP Config',       icon: '⚙️',  desc: 'Claude Desktop / Windsurf' },
+    '10000002': { color: '#58a6ff', label: 'MCP Config',       icon: '⚙️',  desc: 'Alternate client' },
+    '10000004': { color: '#f0883e', label: 'Native App',       icon: '🖥️',  desc: 'Running AI application' },
+    '20000001': { color: '#3fb950', label: 'Local LLM',        icon: '🧠',  desc: 'Local model server' },
+    '30000001': { color: '#bc8cff', label: 'Editor Extension', icon: '🖊️', desc: 'AI-enabled editor' },
+  };
+
+  const ts2str  = ts => ts ? new Date(ts * 1000).toLocaleString() : '—';
+  const totalExtCount       = browserExts.reduce((s, b) => s + (b.profiles||[]).reduce((ps, p) => ps + (p.extensions||[]).length, 0), 0);
+  const totalEditorExtCount = editorExts.reduce((s, e) => s + (e.extensions||[]).length, 0);
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
+  const sectionHdr = (icon, title, count) =>
+    `<div style="display:flex;align-items:center;gap:8px;margin:24px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--border)">
+       <span style="font-size:16px">${icon}</span>
+       <span style="font-size:13px;font-weight:700;color:var(--text)">${esc(title)}</span>
+       ${count != null ? `<span style="font-size:11px;background:var(--bg3);color:var(--muted);border:1px solid var(--border);border-radius:10px;padding:0 7px;line-height:18px">${count}</span>` : ''}
+     </div>`;
+
+  const tblHdr = cols =>
+    `<div style="display:grid;grid-template-columns:${cols};gap:0;background:var(--bg3);border-radius:6px 6px 0 0;border:1px solid var(--border);border-bottom:none">`;
+  const tblCell = (txt, mono) =>
+    `<span style="padding:6px 10px;font-size:11px;font-weight:600;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${txt}</span>`;
+  const tblRow = (cols, content, last, extraStyle) =>
+    `<div style="display:grid;grid-template-columns:${cols};gap:0;border:1px solid var(--border);${last?'border-radius:0 0 6px 6px':'border-bottom:none'};${extraStyle||''}">
+       ${content}
+     </div>`;
+  const tblVal = (txt, mono, muted, color) =>
+    `<span style="padding:6px 10px;font-size:12px;${mono?'font-family:monospace;':''}${muted?'color:var(--muted);':'color:var(--text);'}${color?`color:${color};`:''}white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(txt)}">${esc(txt)}</span>`;
+
+  // ── Stat tiles ─────────────────────────────────────────────────────────────
+  const tiles = [
+    { label: 'AI Agents',        val: agents.length,         color: '#58a6ff' },
+    { label: 'Browser Exts',     val: totalExtCount,          color: '#f0883e' },
+    { label: 'Editor Exts',      val: totalEditorExtCount,    color: '#bc8cff' },
+    { label: 'Local LLM Servers',val: llmServers.length,      color: '#3fb950' },
+  ];
+  let html = `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:4px">`;
+  for (const t of tiles) {
+    html += `<div style="background:var(--bg2);border:1px solid var(--border);border-top:3px solid ${t.color};border-radius:6px;padding:12px 16px">
+      <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">${t.label}</div>
+      <div style="font-size:28px;font-weight:700;color:${t.color};line-height:1">${t.val}</div>
+    </div>`;
+  }
+  // Signature tile
+  const sigOk  = sigVer !== '0';
+  const sigCol  = sigOk ? '#3fb950' : '#f0883e';
+  const sigText = sigOk ? `v${esc(sigVer)}` : 'Not downloaded';
+  html += `<div style="background:var(--bg2);border:1px solid var(--border);border-top:3px solid ${sigCol};border-radius:6px;padding:12px 16px">
+    <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">AI Signatures</div>
+    <div style="display:flex;align-items:center;gap:6px;margin-top:4px">
+      <span style="width:8px;height:8px;border-radius:50%;background:${sigCol};flex-shrink:0"></span>
+      <span style="font-size:12px;font-weight:600;color:${sigCol}">${sigText}</span>
+    </div>
+  </div>`;
+  html += `</div>`;
+
+  // ── AI Agents ──────────────────────────────────────────────────────────────
+  if (agents.length) {
+    html += sectionHdr('🤖', 'AI Agents', agents.length);
+    for (const agent of agents) {
+      const sysId    = String(agent.system_id || '');
+      const meta     = SID_META[sysId] || { color: '#8b949e', label: `ID ${sysId}`, icon: '?', desc: '' };
+      const scanTime = ts2str(agent.timestamp);
+      const mcpServers = agent.mcp_servers || [];
+      const pi         = agent.process_info;
+
+      html += `<div style="background:var(--bg2);border:1px solid var(--border);border-left:3px solid ${meta.color};border-radius:0 6px 6px 0;margin-bottom:10px;overflow:hidden">`;
+
+      // Card header
+      html += `<div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--bg3);border-bottom:1px solid var(--border)">
+        <span style="font-size:16px">${meta.icon}</span>
+        <div style="flex:1;min-width:0">
+          <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap">
+            <span style="font-size:12px;font-weight:700;color:${meta.color}">${esc(meta.label)}</span>
+            <span style="font-size:11px;color:var(--muted)">${esc(meta.desc)}</span>
+            <span style="font-family:monospace;font-size:10px;color:var(--muted);background:var(--bg);border:1px solid var(--border);border-radius:3px;padding:0 5px">${esc(sysId)}</span>
+          </div>
+        </div>
+        <span style="font-size:10px;color:var(--muted);flex-shrink:0">${esc(scanTime)}</span>
+      </div>`;
+
+      // Process info (native apps)
+      if (pi) {
+        html += `<div style="padding:8px 14px;border-bottom:${mcpServers.length ? '1px solid var(--border)' : 'none'};display:flex;gap:16px;flex-wrap:wrap;align-items:baseline">
+          <span style="font-size:11px;color:var(--muted)">Process</span>
+          <span style="font-size:12px;font-weight:600;color:var(--text)">${esc(pi.pname || '—')}</span>
+          ${pi.ppname ? `<span style="font-size:11px;color:var(--muted)">Parent: <span style="color:var(--text);font-family:monospace">${esc(pi.ppname)}</span></span>` : ''}
+          ${pi.bin_path ? `<span style="font-size:11px;color:var(--muted);font-family:monospace;word-break:break-all">${esc(pi.bin_path)}</span>` : ''}
+        </div>`;
+      }
+
+      // MCP servers table
+      if (mcpServers.length) {
+        const cols = '130px 1fr 1fr';
+        html += `<div style="overflow-x:auto">`;
+        html += `<div style="display:grid;grid-template-columns:${cols};min-width:420px;background:var(--bg3);border-top:1px solid var(--border)">
+          ${tblCell('Name')}${tblCell('Package')}${tblCell('Scoped Path')}
+        </div>`;
+        mcpServers.forEach((srv, i) => {
+          const pkg    = esc(srv.resolved_package || srv.command || '—');
+          const fsArgs = (srv.args || []).filter(a => typeof a === 'string' && a.startsWith('/'));
+          const isFsSrv = /server-filesystem/i.test(srv.resolved_package || '');
+          const pathVal  = isFsSrv && fsArgs.length ? fsArgs.join(', ') : '—';
+          const pathColor = isFsSrv && fsArgs.length ? '#e6edf3' : null;
+          const isLast = i === mcpServers.length - 1;
+          html += `<div style="display:grid;grid-template-columns:${cols};min-width:420px;border-top:1px solid var(--border)${isLast ? ';border-radius:0 0 0 0' : ''}">
+            <span style="padding:7px 10px;font-size:12px;font-weight:600;color:var(--text);border-right:1px solid var(--border)">${esc(srv.name || '—')}</span>
+            <span style="padding:7px 10px;font-size:11px;color:var(--muted);font-family:monospace;border-right:1px solid var(--border);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${pkg}">${pkg}</span>
+            <span style="padding:7px 10px;font-size:11px;${isFsSrv && fsArgs.length ? 'color:var(--text)' : 'color:var(--muted)'};font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(pathVal)}">${esc(pathVal)}</span>
+          </div>`;
+        });
+        html += `</div>`;
+      }
+
+      html += `</div>`;
+    }
+  }
+
+  // ── Browser Extensions ────────────────────────────────────────────────────
+  const allBrowserRows = [];
+  for (const b of browserExts) {
+    for (const p of (b.profiles || [])) {
+      for (const ext of (p.extensions || [])) {
+        allBrowserRows.push({ browser: b.browser || '—', profile: p.profile || '—', name: ext.name || '—', version: ext.version || '?' });
+      }
+    }
+  }
+  if (allBrowserRows.length) {
+    html += sectionHdr('🌐', 'Browser Extensions', allBrowserRows.length);
+    const cols = '1fr 160px 160px 90px';
+    html += `<div style="overflow-x:auto;border-radius:6px;border:1px solid var(--border)">`;
+    html += `<div style="display:grid;grid-template-columns:${cols};min-width:520px;background:var(--bg3);border-radius:5px 5px 0 0;border-bottom:1px solid var(--border)">
+      ${tblCell('Extension')}${tblCell('Browser')}${tblCell('Profile')}${tblCell('Version')}
+    </div>`;
+    allBrowserRows.forEach((r, i) => {
+      const isLast = i === allBrowserRows.length - 1;
+      html += `<div style="display:grid;grid-template-columns:${cols};min-width:520px;border-bottom:${isLast ? 'none' : '1px solid var(--border)'}">
+        <span style="padding:7px 10px;font-size:12px;font-weight:600;color:var(--text);border-right:1px solid var(--border)">${esc(r.name)}</span>
+        <span style="padding:7px 10px;font-size:12px;color:var(--muted);text-transform:capitalize;border-right:1px solid var(--border)">${esc(r.browser)}</span>
+        <span style="padding:7px 10px;font-size:12px;color:var(--muted);border-right:1px solid var(--border);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(r.profile)}">${esc(r.profile)}</span>
+        <span style="padding:7px 10px;font-size:11px;color:var(--muted);font-family:monospace">${esc(r.version)}</span>
+      </div>`;
+    });
+    html += `</div>`;
+  }
+
+  // ── Editor Extensions ──────────────────────────────────────────────────────
+  const allEditorRows = [];
+  for (const e of editorExts) {
+    for (const ext of (e.extensions || [])) {
+      allEditorRows.push({ editor: e.editor || '—', name: ext.name || '—', publisher: ext.publisher || '—', version: ext.version || '?' });
+    }
+  }
+  if (allEditorRows.length) {
+    html += sectionHdr('🖊️', 'Editor Extensions', allEditorRows.length);
+    const cols = '120px 1fr 160px 90px';
+    html += `<div style="overflow-x:auto;border-radius:6px;border:1px solid var(--border)">`;
+    html += `<div style="display:grid;grid-template-columns:${cols};min-width:480px;background:var(--bg3);border-radius:5px 5px 0 0;border-bottom:1px solid var(--border)">
+      ${tblCell('Editor')}${tblCell('Extension')}${tblCell('Publisher')}${tblCell('Version')}
+    </div>`;
+    allEditorRows.forEach((r, i) => {
+      const isLast = i === allEditorRows.length - 1;
+      html += `<div style="display:grid;grid-template-columns:${cols};min-width:480px;border-bottom:${isLast ? 'none' : '1px solid var(--border)'}">
+        <span style="padding:7px 10px;font-size:12px;font-weight:600;color:#bc8cff;text-transform:capitalize;border-right:1px solid var(--border)">${esc(r.editor)}</span>
+        <span style="padding:7px 10px;font-size:12px;color:var(--text);border-right:1px solid var(--border)">${esc(r.name)}</span>
+        <span style="padding:7px 10px;font-size:12px;color:var(--muted);border-right:1px solid var(--border)">${esc(r.publisher)}</span>
+        <span style="padding:7px 10px;font-size:11px;color:var(--muted);font-family:monospace">${esc(r.version)}</span>
+      </div>`;
+    });
+    html += `</div>`;
+  }
+
+  // ── Local LLM Servers ─────────────────────────────────────────────────────
+  if (llmServers.length) {
+    html += sectionHdr('🧠', 'Local LLM Servers', llmServers.length);
+    for (const srv of llmServers) {
+      const pi  = srv.process_info || {};
+      const net = srv.network || {};
+      const models = srv.models || [];
+      const endpoint = `${net.host || '?'}:${net.listen_port || '?'}`;
+
+      html += `<div style="background:var(--bg2);border:1px solid var(--border);border-left:3px solid #3fb950;border-radius:0 6px 6px 0;margin-bottom:10px;overflow:hidden">`;
+
+      // Server header
+      html += `<div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--bg3);border-bottom:1px solid var(--border)">
+        <span style="width:8px;height:8px;border-radius:50%;background:#3fb950;flex-shrink:0"></span>
+        <span style="font-size:13px;font-weight:700;color:var(--text)">${esc(pi.pname || 'LLM Server')}</span>
+        <span style="font-size:11px;color:var(--muted);font-family:monospace">${esc(endpoint)}</span>
+        ${pi.bin_path ? `<span style="font-size:10px;color:var(--muted);font-family:monospace;margin-left:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(pi.bin_path)}">${esc(pi.bin_path)}</span>` : ''}
+      </div>`;
+
+      // Models table
+      if (models.length) {
+        const cols = '1fr 90px 90px 80px';
+        html += `<div style="overflow-x:auto">`;
+        html += `<div style="display:grid;grid-template-columns:${cols};min-width:380px;background:var(--bg3);border-bottom:1px solid var(--border)">
+          ${tblCell('Model')}${tblCell('Parameters')}${tblCell('Quant')}${tblCell('Size')}
+        </div>`;
+        models.forEach((m, i) => {
+          const sizeGb = m.size ? (m.size / 1e9).toFixed(1) + ' GB' : '—';
+          const isLast = i === models.length - 1;
+          html += `<div style="display:grid;grid-template-columns:${cols};min-width:380px;border-bottom:${isLast ? 'none' : '1px solid var(--border)'}">
+            <span style="padding:7px 10px;font-size:12px;font-weight:600;color:var(--text);font-family:monospace;border-right:1px solid var(--border)">${esc(m.name || '—')}</span>
+            <span style="padding:7px 10px;font-size:11px;color:var(--muted);border-right:1px solid var(--border)">${esc(m.parameter_size || '—')}</span>
+            <span style="padding:7px 10px;font-size:11px;color:var(--muted);font-family:monospace;border-right:1px solid var(--border)">${esc(m.quantization || '—')}</span>
+            <span style="padding:7px 10px;font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums">${esc(sizeGb)}</span>
+          </div>`;
+        });
+        html += `</div>`;
+      }
+
+      html += `</div>`;
+    }
+  }
+
+  // trailing padding
+  html += `<div style="height:20px"></div>`;
+  container.innerHTML = html;
+}
+
+
 // ─── Flow Path ─────────────────────────────────────────────────────────────────
+
+// ── Node type lookup tables (used by fpRenderGraph / inspector) ───────────────
+const FL_BG    = { user:'#0d2137', process:'#1c1c2e', sase:'#0d2118', bypass:'#231b00', destination:'#130d21', more:'#1a1a2e' };
+const FL_ICONS = { user:'👤', process:'🖥️', sase:'🛡️', bypass:'⚠️', destination:'☁️', more:'⋯' };
 
 // ── Shared path utilities ───────────────────────────────────────────────────────
 function flExtractDomain(host) {
