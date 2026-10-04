@@ -1219,7 +1219,7 @@ body {
 
 <script>
 // ─── Version ─────────────────────────────────────────────────────────────────
-const TOOL_VERSION = '1.16.6';
+const TOOL_VERSION = '1.16.7';
 
 // ─── State ────────────────────────────────────────────────────────────────────
 const state = {
@@ -4699,11 +4699,11 @@ function detectFindings() {
   return detected;
 }
 
-let _findingsCat = 'all';
+let _findingsCat = new Set();
 let _findingsSev = new Set();
 
 function renderFindings() {
-  _findingsCat = 'all';
+  _findingsCat = new Set();
   _findingsSev = new Set();
   const detected  = detectFindings();
   const actionable = detected.filter(d => d.severity === 'high' || d.severity === 'medium').length;
@@ -4908,12 +4908,11 @@ function dismissFinding(id) {
 
 function findingsApplyFilters() {
   const q           = (document.getElementById('findings-search')?.value || '').toLowerCase().trim();
-  const activeCat   = _findingsCat;
   const hideReviewed = document.getElementById('findings-hide-reviewed')?.checked;
 
   document.querySelectorAll('.finding-card').forEach(c => {
     const matchQ   = !q           || c.dataset.text?.includes(q);
-    const matchCat = activeCat === 'all' || c.dataset.cat === activeCat;
+    const matchCat = _findingsCat.size === 0 || _findingsCat.has(c.dataset.cat);
     const matchSev = _findingsSev.size === 0 || _findingsSev.has(c.dataset.sev);
     const hidden   = hideReviewed && c.classList.contains('reviewed');
     c.style.display = (matchQ && matchCat && matchSev && !hidden) ? '' : 'none';
@@ -4929,9 +4928,24 @@ function findingsApplyFilters() {
 }
 
 function findingsFilterCat(cat, btn) {
-  _findingsCat = cat;
-  document.querySelectorAll('#findings-cat-group .fl-fbtn').forEach(b =>
-    b.classList.toggle('active', b === btn));
+  if (cat === 'all') {
+    _findingsCat = new Set();
+  } else if (_findingsCat.has(cat)) {
+    _findingsCat.delete(cat);
+  } else {
+    _findingsCat.add(cat);
+  }
+  const anyActive = _findingsCat.size > 0;
+  document.querySelectorAll('#findings-cat-group .fl-fbtn').forEach(b => {
+    if (b.dataset.f === 'all') {
+      b.classList.toggle('active', !anyActive);
+      b.style.opacity = '';
+    } else {
+      const active = _findingsCat.has(b.dataset.f);
+      b.style.opacity = anyActive && !active ? '0.35' : '1';
+      b.style.borderWidth = active ? '2px' : '';
+    }
+  });
   findingsApplyFilters();
 }
 
