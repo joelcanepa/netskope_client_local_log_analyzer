@@ -1251,7 +1251,7 @@ function parseRTag(ver) {
   if (parts.length < 4) return null;
   const build = parseInt(parts[3], 10);
   if (!isFinite(build) || build < 100) return null;
-  return 'R' + Math.floor(build / 10);
+  return 'R' + Math.floor(build / 20);
 }
 
 let _detectedFindings = []; // cached by renderFindings(), read by copyFindingToCase()
