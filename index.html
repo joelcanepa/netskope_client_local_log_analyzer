@@ -1171,7 +1171,7 @@ body {
 
 <script>
 // ─── Version ─────────────────────────────────────────────────────────────────
-const TOOL_VERSION = '1.14.2';
+const TOOL_VERSION = '1.14.3';
 
 // ─── State ────────────────────────────────────────────────────────────────────
 const state = {
@@ -10725,6 +10725,7 @@ function fpRenderGraph(group) {
       </marker>`).join('')}
     <filter id="fp-sh"><feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000" flood-opacity="0.4"/></filter>
     <filter id="fp-glow"><feGaussianBlur stdDeviation="4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <style>@keyframes fl-dash{to{stroke-dashoffset:-20}}.fl-anim{animation:fl-dash 0.7s linear infinite;}</style>
   </defs>`;
 
   // Column headers
@@ -10747,7 +10748,7 @@ function fpRenderGraph(group) {
     const x2 = tn.x,           y2 = tn.y+FP_NODE_H/2;
     const cx1 = x1+(x2-x1)*0.4, cx2 = x2-(x2-x1)*0.4;
     const col = FP_PATHS[e.type]?.color || '#6e7681';
-    const anim = (e.type==='npa'||e.type==='bwan') ? ' class="fl-anim"' : '';
+    const anim = e.type!=='direct' ? ' class="fl-anim"' : '';
     const dash = e.type!=='direct' ? 'stroke-dasharray="7 3"' : '';
     svg += `<path d="M${x1},${y1} C${cx1},${y1} ${cx2},${y2} ${x2},${y2}"
       fill="none" stroke="${col}" stroke-width="${e.type==='direct'?'1.2':'1.6'}" opacity="${e.type==='direct'?'0.4':'0.65'}"
