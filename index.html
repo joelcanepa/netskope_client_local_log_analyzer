@@ -1171,7 +1171,7 @@ body {
 
 <script>
 // ─── Version ─────────────────────────────────────────────────────────────────
-const TOOL_VERSION = '1.15.11';
+const TOOL_VERSION = '1.15.12';
 
 // ─── State ────────────────────────────────────────────────────────────────────
 const state = {
@@ -6728,10 +6728,13 @@ function renderTimeline() {
     lanesFixedSvg += `<rect x="0" y="${MT+li*LANE_H}" width="${W}" height="${LANE_H}" fill="${meta.color}${li%2===0?'0b':'06'}"/>`;
     lanesFixedSvg += `<line x1="0" y1="${MT+(li+1)*LANE_H}" x2="${W}" y2="${MT+(li+1)*LANE_H}" stroke="var(--border)" stroke-width="0.5"/>`;
 
-    // Lane label + count (left column, not clipped)
+    // Lane label + count (left column, not clipped) — hover shows lane summary
     const nc = _tlCat === cat ? 'all' : cat;
-    lanesFixedSvg += `<text x="${LW-10}" y="${cy-5}" font-size="12" font-weight="700" fill="${dimmed?'var(--muted)':meta.color}" text-anchor="end" style="cursor:pointer;user-select:none" onclick="tlSetCat('${nc}')">${meta.label}</text>`;
-    lanesFixedSvg += `<text x="${LW-10}" y="${cy+9}" font-size="9" fill="${dimmed?'var(--muted)':meta.color}" text-anchor="end" opacity="${dimmed?0.3:0.55}">${evs.length ? evs.length+' event'+(evs.length>1?'s':'') : '—'}</text>`;
+    lanesFixedSvg += `<g onmouseover="tlLaneTipShow(event,'${cat}')" onmouseout="tlLaneTipHide()">
+      <rect x="4" y="${MT+li*LANE_H+2}" width="${LW-8}" height="${LANE_H-4}" fill="transparent" style="cursor:pointer" onclick="tlSetCat('${nc}')"/>
+      <text x="${LW-10}" y="${cy-5}" font-size="12" font-weight="700" fill="${dimmed?'var(--muted)':meta.color}" text-anchor="end" style="cursor:pointer;user-select:none" onclick="tlSetCat('${nc}')">${meta.label}</text>
+      <text x="${LW-10}" y="${cy+9}" font-size="9" fill="${dimmed?'var(--muted)':meta.color}" text-anchor="end" opacity="${dimmed?0.3:0.55}">${evs.length ? evs.length+' event'+(evs.length>1?'s':'') : '—'}</text>
+    </g>`;
 
     // Baseline + empty hint + chips all go inside the clip group
     lanesClipSvg += `<line x1="${LW}" y1="${cy}" x2="${W-MR}" y2="${cy}" stroke="${meta.color}" stroke-width="0.8" opacity="${dimmed?0.08:0.18}"/>`;
@@ -6840,7 +6843,8 @@ function renderTimeline() {
         ${dateWatermark}${axisSvg}${divSvg}${brushSvg}
       </svg>
     </div>
-    <div id="tl-tip" style="display:none;position:fixed;background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:14px 16px;font-size:12px;color:var(--text);pointer-events:none;z-index:9999;min-width:280px;max-width:380px;line-height:1.4;box-shadow:0 6px 32px rgba(0,0,0,.45)"></div>`;
+    <div id="tl-tip" style="display:none;position:fixed;background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:14px 16px;font-size:12px;color:var(--text);pointer-events:none;z-index:9999;min-width:280px;max-width:380px;line-height:1.4;box-shadow:0 6px 32px rgba(0,0,0,.45)"></div>
+    <div id="tl-lane-tip" style="display:none;position:fixed;background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:14px 16px;font-size:12px;color:var(--text);pointer-events:none;z-index:9998;min-width:260px;max-width:340px;line-height:1.4;box-shadow:0 6px 32px rgba(0,0,0,.45)"></div>`;
 }
 
 
@@ -7014,6 +7018,76 @@ function _tlRenderTip(cx, cy, idx) {
   const ty = cy - 10 + tipH > window.innerHeight ? cy - tipH - 6  : cy - 10;
   tip.style.left = Math.max(8, lx) + 'px';
   tip.style.top  = Math.max(8, ty) + 'px';
+}
+function tlLaneTipShow(e, catKey) {
+  const tip = document.getElementById('tl-lane-tip'); if (!tip) return;
+  const cat = TL_CAT[catKey] || { label: catKey, color: '#8b949e' };
+  const SEV_ICON = { good:'✅', bad:'🔴', warn:'⚠️', info:'🔵', muted:'⚪' };
+  const SEV_FILL = { good:'#3fb950', bad:'#f85149', warn:'#d29922', info:'#58a6ff', muted:'#6e7681' };
+
+  const catEvs = (_tlEvArr || []).filter(ev => ev.cat === catKey).sort((a, b) => a.ms - b.ms);
+  if (!catEvs.length) return;
+
+  const total = catEvs.length;
+  const tMin = catEvs[0].ms, tMax = catEvs[total-1].ms;
+  const dur = tMax - tMin;
+
+  const fmtTime = ms => {
+    const d = new Date(ms);
+    return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+  };
+  const fmtDur = ms => {
+    const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000), s = Math.floor((ms % 60000) / 1000);
+    if (h > 0) return `${h}h ${m}m`; if (m > 0) return `${m}m ${s}s`; return `${s}s`;
+  };
+
+  // Severity breakdown (worst-first order)
+  const sevCounts = {};
+  catEvs.forEach(ev => { sevCounts[ev.sev] = (sevCounts[ev.sev] || 0) + 1; });
+  const sevRow = ['bad','warn','good','info','muted']
+    .filter(s => sevCounts[s])
+    .map(s => `<span style="display:inline-flex;align-items:center;gap:3px;margin-right:10px">${SEV_ICON[s]} <span style="color:var(--text);font-weight:600">×${sevCounts[s]}</span></span>`)
+    .join('');
+
+  // Label frequency
+  const labelCounts = {};
+  catEvs.forEach(ev => { labelCounts[ev.label] = (labelCounts[ev.label] || 0) + 1; });
+  const labelRows = Object.entries(labelCounts).sort((a,b) => b[1]-a[1])
+    .map(([lbl, n]) => `<div style="display:flex;justify-content:space-between;padding:3px 0;font-size:11px;border-bottom:1px solid var(--border)">
+      <span style="color:var(--text)">${lbl}</span>
+      <span style="color:var(--muted);font-family:var(--font-mono,monospace);margin-left:14px">×${n}</span>
+    </div>`).join('');
+
+  // Mini dot timeline (severity-colored)
+  const TW = 248, TH = 20, tSpan = tMax - tMin || 1;
+  const dotX = ms => 8 + ((ms - tMin) / tSpan) * (TW - 16);
+  const connLine = total > 1 ? `<line x1="${dotX(tMin).toFixed(1)}" y1="10" x2="${dotX(tMax).toFixed(1)}" y2="10" stroke="#444c56" stroke-width="1.5" stroke-linecap="round"/>` : '';
+  const dots = catEvs.map(ev => `<circle cx="${dotX(ev.ms).toFixed(1)}" cy="10" r="3.5" fill="${SEV_FILL[ev.sev]||'#8b949e'}" opacity="0.75"/>`).join('');
+
+  tip.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+      <span style="font-size:11px;padding:2px 8px;border-radius:10px;background:${cat.color}22;color:${cat.color};font-weight:700;letter-spacing:.3px">${cat.label}</span>
+      <span style="font-size:10px;color:var(--muted)">${total} event${total!==1?'s':''}${dur>0?' · '+fmtDur(dur):''}</span>
+    </div>
+    <div style="background:var(--bg1);border-radius:6px;padding:8px 8px 5px;margin-bottom:10px">
+      <svg viewBox="0 0 ${TW} ${TH}" width="100%" height="${TH}" style="display:block;overflow:visible">${connLine}${dots}</svg>
+      <div style="display:flex;justify-content:space-between;font-family:var(--font-mono,monospace);font-size:9px;color:var(--muted);margin-top:3px">
+        <span>${fmtTime(tMin)}</span>${total>1?`<span>${fmtTime(tMax)}</span>`:''}
+      </div>
+    </div>
+    <div style="font-size:11px;margin-bottom:10px">${sevRow}</div>
+    <div>${labelRows}</div>`;
+
+  tip.style.left = '-9999px'; tip.style.top = '-9999px'; tip.style.display = 'block';
+  const tipW = tip.offsetWidth || 280, tipH = tip.scrollHeight || 160;
+  const lx = e.clientX + 18 + tipW > window.innerWidth ? e.clientX - tipW - 8 : e.clientX + 18;
+  const ty = Math.max(8, Math.min(window.innerHeight - tipH - 8, e.clientY - tipH / 2));
+  tip.style.left = Math.max(8, lx) + 'px';
+  tip.style.top  = ty + 'px';
+}
+function tlLaneTipHide() {
+  const tip = document.getElementById('tl-lane-tip');
+  if (tip) tip.style.display = 'none';
 }
 function tlTipToggleFull(btn) {
   const full = document.getElementById('tl-tip-full');
