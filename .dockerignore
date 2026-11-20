@@ -1,0 +1,6 @@
+.git
+.github
+*.md
+LICENSE
+__pycache__
+*.pyc
